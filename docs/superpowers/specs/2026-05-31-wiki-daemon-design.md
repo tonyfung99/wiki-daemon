@@ -6,12 +6,17 @@
 
 ## 0. Target environment
 
-- **Daemon host (production):** the home MacBook on **macOS 15.7.3 (Sequoia)**.
-  All iCloud handling (Section 6) must be validated here.
-- **Dev/build machine:** a separate Mac on macOS 26. **Do not assume parity** —
-  iCloud behavior differs across releases, so the iCloud code paths are tested on
-  the Sequoia host, not the dev machine.
-- **LLM:** headless `claude -p` (Claude Code CLI) on the daemon host.
+- **Daemon host (production):** an older **Intel (x86_64)** MacBook on **macOS
+  15.7.3 (Sequoia)**. This is the primary target — **must work on x86_64 first**,
+  then arm64. All iCloud handling (Section 6) must be validated here.
+- **Dev/build machine:** a separate **arm64** Mac on macOS 26. **Do not assume
+  parity** on either OS *or* architecture — iCloud behavior differs across
+  releases, and arch differs, so iCloud and arch-sensitive paths are validated on
+  the Intel Sequoia host, not the dev machine.
+- **Arch rule:** prefer pure-Python deps; any compiled dep must ship an x86_64
+  macOS wheel (watchdog, PyObjC, uvicorn all do). No arm-only dependencies.
+- **LLM:** headless `claude -p` (Claude Code CLI, Node-based) — must be installed
+  and runnable on the Intel host (Node 18+ has x86_64 macOS builds).
 
 ## 1. Purpose
 
@@ -333,3 +338,5 @@ that *demonstrably* fails.
 - HTTP API details for M3/M5: bearer-token generation/storage, LAN bind config
   (which interface), and whether the iOS app reaches it via LAN or Tailscale.
 - Setup checklist item: pin the vault ("Keep Downloaded") on the Sequoia host.
+- Validation: each milestone is smoke-tested on the **Intel x86_64 Sequoia host**
+  (not just the arm64 dev machine), since iCloud + arch only differ there.
