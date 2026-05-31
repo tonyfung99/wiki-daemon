@@ -1,0 +1,2034 @@
+# Autonomous Ingest (M1 + M2) Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Build the wiki-daemon's autonomous ingest pipeline — clips dropped into an iCloud Drive vault's `raw/sources/` are automatically transformed into interconnected Markdown wiki pages by headless `claude -p`, with the daemon owning reliability (dedupe, serial queue, crash recovery, iCloud materialization).
+
+**Architecture:** A long-running Python process watches `raw/sources/` (FSEvents + a reconcile sweep as backstop), materializes iCloud "dataless" files, and submits ingest jobs to a single serial write-worker. Each job invokes `claude -p` in the vault (following the vault's `CLAUDE.md`), then the daemon *verifies* the result before marking the source processed. `claude -p` is the only writer of `wiki/`; the watcher only watches `raw/`.
+
+**Tech Stack:** Python 3.12+, `watchdog` (FSEvents), `PyYAML` (frontmatter), stdlib `subprocess`/`os`/`hashlib`/`json`, `pytest`. Headless `claude` CLI (Node-based). Target host: **Intel x86_64, macOS 15.7.3 Sequoia** (validate here first; pure-Python / x86_64-wheel deps only).
+
+**Spec:** `docs/superpowers/specs/2026-05-31-wiki-daemon-design.md`
+
+---
+
+## File Structure
+
+```
+wiki-daemon/
+├── pyproject.toml                      # project metadata, deps, console scripts
+├── src/wiki_daemon/
+│   ├── __init__.py
+│   ├── config.py                       # Config dataclass: vault path, state dir, claude bin
+│   ├── frontmatter.py                  # parse/dump YAML frontmatter ↔ markdown
+│   ├── sources.py                      # SourceFile model + content hashing
+│   ├── state.py                        # StateStore: SHA-256 processed cache (JSON, atomic)
+│   ├── icloud.py                       # dataless detection, materialize, stability gate
+│   ├── claude.py                       # `claude -p` subprocess wrapper (injectable runner)
+│   ├── prompts.py                      # operation prompt builders (ingest)
+│   ├── ops.py                          # ingest() orchestration + verification
+│   ├── scaffold.py                     # `wiki init`: vault skeleton from templates
+│   ├── queue.py                        # JobQueue: persisted serial queue + crash recovery
+│   ├── watcher.py                      # path filter, reconcile diff, FSEvents handler
+│   ├── daemon.py                       # wires watcher → queue → worker (serve loop)
+│   ├── __main__.py                     # `wiki-daemon serve` entrypoint
+│   └── cli.py                          # `wiki` CLI: init / ingest / status (in-process)
+├── src/wiki_daemon/templates/          # vault scaffold templates
+│   ├── CLAUDE.md
+│   ├── purpose.md
+│   ├── index.md
+│   └── log.md
+└── tests/
+    ├── conftest.py                     # shared fixtures (tmp vault, fake claude)
+    ├── test_frontmatter.py
+    ├── test_sources.py
+    ├── test_state.py
+    ├── test_icloud.py
+    ├── test_claude.py
+    ├── test_ops.py
+    ├── test_scaffold.py
+    ├── test_queue.py
+    └── test_watcher.py
+```
+
+**Design boundaries:**
+- `icloud.py`, `claude.py` wrap all OS/subprocess side effects behind **injectable functions** so logic is unit-testable on the arm64 dev machine without real iCloud or a real LLM.
+- Ingest *quality* (the LLM output) is validated by **manual inspection** in Task 12, not by unit tests. Unit tests cover the deterministic plumbing only.
+
+---
+
+## MILESTONE 1 — Manual ingest (prove quality before machinery)
+
+### Task 1: Project skeleton
+
+**Files:**
+- Create: `pyproject.toml`
+- Create: `src/wiki_daemon/__init__.py`
+- Create: `tests/conftest.py`
+
+- [ ] **Step 1: Create `pyproject.toml`**
+
+```toml
+[project]
+name = "wiki-daemon"
+version = "0.1.0"
+description = "LLM-maintained knowledge base daemon"
+requires-python = ">=3.12"
+dependencies = [
+    "watchdog>=4.0",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+wiki = "wiki_daemon.cli:main"
+wiki-daemon = "wiki_daemon.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+wiki_daemon = ["templates/*.md"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+```
+
+- [ ] **Step 2: Create empty package init**
+
+```python
+# src/wiki_daemon/__init__.py
+"""wiki-daemon: an LLM-maintained Markdown knowledge base."""
+
+__version__ = "0.1.0"
+```
+
+- [ ] **Step 3: Create test bootstrap with a shared fixture**
+
+```python
+# tests/conftest.py
+import pytest
+
+
+@pytest.fixture
+def tmp_vault(tmp_path):
+    """A minimal vault directory tree for tests."""
+    (tmp_path / "raw" / "sources").mkdir(parents=True)
+    wiki = tmp_path / "wiki"
+    for sub in ("entities", "concepts", "sources", "queries"):
+        (wiki / sub).mkdir(parents=True)
+    (wiki / "index.md").write_text("# Index\n", encoding="utf-8")
+    (wiki / "log.md").write_text("# Log\n", encoding="utf-8")
+    (tmp_path / "CLAUDE.md").write_text("# schema\n", encoding="utf-8")
+    return tmp_path
+```
+
+- [ ] **Step 4: Create a virtualenv and install (dev)**
+
+Run:
+```bash
+cd ~/workspace/wiki-daemon
+python3 -m venv .venv
+.venv/bin/pip install -e ".[dev]"
+```
+Expected: installs `watchdog`, `PyYAML`, `pytest` and the `wiki`/`wiki-daemon` scripts. On the Intel host, confirm wheels are `x86_64`.
+
+- [ ] **Step 5: Verify pytest collects nothing yet (sanity)**
+
+Run: `.venv/bin/pytest -q`
+Expected: `no tests ran` (exit code 5) — environment works.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add pyproject.toml src/wiki_daemon/__init__.py tests/conftest.py
+git commit -m "chore: project skeleton + test bootstrap"
+```
+
+---
+
+### Task 2: Frontmatter parsing
+
+**Files:**
+- Create: `src/wiki_daemon/frontmatter.py`
+- Test: `tests/test_frontmatter.py`
+
+- [ ] **Step 1: Write the failing tests**
+
+```python
+# tests/test_frontmatter.py
+from wiki_daemon.frontmatter import parse, dump
+
+
+def test_parse_with_frontmatter():
+    text = "---\ntype: source\ntitle: Hi\n---\nbody line\n"
+    meta, body = parse(text)
+    assert meta == {"type": "source", "title": "Hi"}
+    assert body == "body line\n"
+
+
+def test_parse_without_frontmatter():
+    text = "no frontmatter here\n"
+    meta, body = parse(text)
+    assert meta == {}
+    assert body == "no frontmatter here\n"
+
+
+def test_parse_empty_frontmatter():
+    text = "---\n---\nbody\n"
+    meta, body = parse(text)
+    assert meta == {}
+    assert body == "body\n"
+
+
+def test_dump_roundtrip():
+    meta = {"type": "entity", "title": "Acme"}
+    body = "Some body.\n"
+    text = dump(meta, body)
+    meta2, body2 = parse(text)
+    assert meta2 == meta
+    assert body2 == body
+```
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `.venv/bin/pytest tests/test_frontmatter.py -v`
+Expected: FAIL — `ModuleNotFoundError: No module named 'wiki_daemon.frontmatter'`
+
+- [ ] **Step 3: Implement**
+
+```python
+# src/wiki_daemon/frontmatter.py
+"""Parse and serialize YAML frontmatter at the head of a Markdown document."""
+from __future__ import annotations
+
+import yaml
+
+_DELIM = "---"
+
+
+def parse(text: str) -> tuple[dict, str]:
+    """Return (metadata, body). Missing/empty frontmatter yields {}."""
+    if not text.startswith(_DELIM + "\n"):
+        return {}, text
+    rest = text[len(_DELIM) + 1 :]
+    end = rest.find("\n" + _DELIM + "\n")
+    if end == -1:
+        return {}, text
+    raw = rest[:end]
+    body = rest[end + len("\n" + _DELIM + "\n") :]
+    meta = yaml.safe_load(raw) if raw.strip() else None
+    return (meta or {}), body
+
+
+def dump(meta: dict, body: str) -> str:
+    """Serialize metadata + body back into a frontmatter document."""
+    raw = yaml.safe_dump(meta, sort_keys=False, default_flow_style=False).strip()
+    return f"{_DELIM}\n{raw}\n{_DELIM}\n{body}"
+```
+
+- [ ] **Step 4: Run to verify pass**
+
+Run: `.venv/bin/pytest tests/test_frontmatter.py -v`
+Expected: 4 passed.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/wiki_daemon/frontmatter.py tests/test_frontmatter.py
+git commit -m "feat: frontmatter parse/dump"
+```
+
+---
+
+### Task 3: Source model + content hash
+
+**Files:**
+- Create: `src/wiki_daemon/sources.py`
+- Test: `tests/test_sources.py`
+
+- [ ] **Step 1: Write the failing tests**
+
+```python
+# tests/test_sources.py
+from wiki_daemon.sources import SourceFile, read_source, content_sha256
+
+
+def test_content_sha256_is_stable():
+    assert content_sha256(b"hello") == content_sha256(b"hello")
+    assert content_sha256(b"hello") != content_sha256(b"world")
+
+
+def test_read_source_parses_frontmatter(tmp_path):
+    p = tmp_path / "2026-05-31-acme.md"
+    p.write_text("---\ntype: source\nsource_url: https://x.com/a\n---\nbody\n",
+                 encoding="utf-8")
+    src = read_source(p)
+    assert isinstance(src, SourceFile)
+    assert src.path == p
+    assert src.meta["source_url"] == "https://x.com/a"
+    assert src.body == "body\n"
+    assert len(src.sha256) == 64
+```
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `.venv/bin/pytest tests/test_sources.py -v`
+Expected: FAIL — `ModuleNotFoundError: No module named 'wiki_daemon.sources'`
+
+- [ ] **Step 3: Implement**
+
+```python
+# src/wiki_daemon/sources.py
+"""Model a raw source file and hash its content for dedupe."""
+from __future__ import annotations
+
+import hashlib
+from dataclasses import dataclass
+from pathlib import Path
+
+from wiki_daemon.frontmatter import parse
+
+
+def content_sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+@dataclass(frozen=True)
+class SourceFile:
+    path: Path
+    sha256: str
+    meta: dict
+    body: str
+
+
+def read_source(path: Path) -> SourceFile:
+    data = Path(path).read_bytes()
+    meta, body = parse(data.decode("utf-8"))
+    return SourceFile(path=Path(path), sha256=content_sha256(data), meta=meta, body=body)
+```
+
+- [ ] **Step 4: Run to verify pass**
+
+Run: `.venv/bin/pytest tests/test_sources.py -v`
+Expected: 2 passed.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/wiki_daemon/sources.py tests/test_sources.py
+git commit -m "feat: source file model + content hash"
+```
+
+---
+
+### Task 4: State store (SHA-256 processed cache)
+
+**Files:**
+- Create: `src/wiki_daemon/state.py`
+- Test: `tests/test_state.py`
+
+- [ ] **Step 1: Write the failing tests**
+
+```python
+# tests/test_state.py
+from wiki_daemon.state import StateStore
+
+
+def test_unprocessed_then_processed(tmp_path):
+    store = StateStore(tmp_path / "processed.json")
+    assert store.is_processed("abc") is False
+    store.mark_processed("abc", "raw/sources/x.md")
+    assert store.is_processed("abc") is True
+
+
+def test_persists_across_reload(tmp_path):
+    path = tmp_path / "processed.json"
+    StateStore(path).mark_processed("deadbeef", "raw/sources/y.md")
+    reloaded = StateStore(path)
+    assert reloaded.is_processed("deadbeef") is True
+
+
+def test_atomic_write_no_temp_left_behind(tmp_path):
+    path = tmp_path / "processed.json"
+    StateStore(path).mark_processed("abc", "raw/sources/x.md")
+    leftovers = list(tmp_path.glob("*.tmp"))
+    assert leftovers == []
+```
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `.venv/bin/pytest tests/test_state.py -v`
+Expected: FAIL — `ModuleNotFoundError: No module named 'wiki_daemon.state'`
+
+- [ ] **Step 3: Implement**
+
+```python
+# src/wiki_daemon/state.py
+"""Persisted SHA-256 -> source-path map; makes ingest idempotent."""
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+
+
+class StateStore:
+    def __init__(self, path: Path):
+        self._path = Path(path)
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._data: dict[str, str] = {}
+        if self._path.exists():
+            self._data = json.loads(self._path.read_text(encoding="utf-8"))
+
+    def is_processed(self, sha: str) -> bool:
+        return sha in self._data
+
+    def mark_processed(self, sha: str, source_path: str) -> None:
+        self._data[sha] = source_path
+        self._flush()
+
+    def _flush(self) -> None:
+        tmp = self._path.with_suffix(self._path.suffix + ".tmp")
+        tmp.write_text(json.dumps(self._data, indent=2), encoding="utf-8")
+        os.replace(tmp, self._path)  # atomic rename
+```
+
+- [ ] **Step 4: Run to verify pass**
+
+Run: `.venv/bin/pytest tests/test_state.py -v`
+Expected: 3 passed.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/wiki_daemon/state.py tests/test_state.py
+git commit -m "feat: persisted SHA-256 state store with atomic writes"
+```
+
+---
+
+### Task 5: Config
+
+**Files:**
+- Create: `src/wiki_daemon/config.py`
+- Test: `tests/test_config.py`
+
+- [ ] **Step 1: Write the failing tests**
+
+```python
+# tests/test_config.py
+from pathlib import Path
+from wiki_daemon.config import Config
+
+
+def test_paths_derive_from_vault(tmp_path):
+    cfg = Config(vault=tmp_path, state_root=tmp_path / "state")
+    assert cfg.raw_sources == tmp_path / "raw" / "sources"
+    assert cfg.wiki == tmp_path / "wiki"
+    assert cfg.claude_md == tmp_path / "CLAUDE.md"
+
+
+def test_vault_id_is_stable_and_path_specific(tmp_path):
+    a = Config(vault=tmp_path / "A", state_root=tmp_path)
+    a2 = Config(vault=tmp_path / "A", state_root=tmp_path)
+    b = Config(vault=tmp_path / "B", state_root=tmp_path)
+    assert a.vault_id == a2.vault_id
+    assert a.vault_id != b.vault_id
+
+
+def test_state_dir_under_state_root(tmp_path):
+    cfg = Config(vault=tmp_path / "A", state_root=tmp_path / "root")
+    assert cfg.state_dir == (tmp_path / "root" / cfg.vault_id)
+    assert cfg.processed_json == cfg.state_dir / "processed.json"
+```
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `.venv/bin/pytest tests/test_config.py -v`
+Expected: FAIL — `ModuleNotFoundError: No module named 'wiki_daemon.config'`
+
+- [ ] **Step 3: Implement**
+
+```python
+# src/wiki_daemon/config.py
+"""Runtime configuration. Daemon state lives OUTSIDE the vault (never iCloud)."""
+from __future__ import annotations
+
+import hashlib
+from dataclasses import dataclass, field
+from pathlib import Path
+
+
+def _default_state_root() -> Path:
+    return Path.home() / ".wiki-daemon"
+
+
+@dataclass
+class Config:
+    vault: Path
+    state_root: Path = field(default_factory=_default_state_root)
+    claude_bin: str = "claude"
+
+    def __post_init__(self) -> None:
+        self.vault = Path(self.vault).expanduser().resolve()
+        self.state_root = Path(self.state_root).expanduser()
+
+    @property
+    def vault_id(self) -> str:
+        return hashlib.sha256(str(self.vault).encode("utf-8")).hexdigest()[:12]
+
+    @property
+    def raw_sources(self) -> Path:
+        return self.vault / "raw" / "sources"
+
+    @property
+    def wiki(self) -> Path:
+        return self.vault / "wiki"
+
+    @property
+    def claude_md(self) -> Path:
+        return self.vault / "CLAUDE.md"
+
+    @property
+    def state_dir(self) -> Path:
+        return self.state_root / self.vault_id
+
+    @property
+    def processed_json(self) -> Path:
+        return self.state_dir / "processed.json"
+
+    @property
+    def queue_dir(self) -> Path:
+        return self.state_dir / "queue"
+```
+
+Note: `Config(vault=tmp_path / "A")` does not require the path to exist (`resolve()` tolerates missing tails), so the `vault_id` tests work without creating dirs.
+
+- [ ] **Step 4: Run to verify pass**
+
+Run: `.venv/bin/pytest tests/test_config.py -v`
+Expected: 3 passed.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/wiki_daemon/config.py tests/test_config.py
+git commit -m "feat: Config with vault-derived paths and stable vault_id"
+```
+
+---
+
+### Task 6: Vault scaffold templates + `wiki init`
+
+**Files:**
+- Create: `src/wiki_daemon/templates/CLAUDE.md`
+- Create: `src/wiki_daemon/templates/purpose.md`
+- Create: `src/wiki_daemon/templates/index.md`
+- Create: `src/wiki_daemon/templates/log.md`
+- Create: `src/wiki_daemon/scaffold.py`
+- Test: `tests/test_scaffold.py`
+
+- [ ] **Step 1: Write the template files**
+
+`src/wiki_daemon/templates/CLAUDE.md` — this is the maintainer brain `claude -p` reads:
+````markdown
+# Wiki Maintainer Instructions
+
+You maintain an LLM wiki: a compounding, interconnected Markdown knowledge base.
+You are invoked headlessly for ONE operation at a time, with the vault as your
+working directory.
+
+## Layers
+- `raw/sources/` — immutable inputs. READ ONLY. Never edit or delete these.
+- `wiki/` — your output. You own it entirely.
+  - `wiki/entities/` — people, orgs, products, places (one page each)
+  - `wiki/concepts/` — ideas, theories, methods (one page each)
+  - `wiki/sources/` — exactly one summary page per raw source
+  - `wiki/queries/` — saved query answers
+  - `wiki/index.md` — catalog of every page with a one-line summary, by category
+  - `wiki/log.md` — append-only operation history
+
+## Page rules
+- Every wiki page starts with YAML frontmatter:
+  ```
+  ---
+  type: entity | concept | source | query
+  title: <Human Title>
+  sources: [raw/sources/<file>.md, ...]
+  updated: <YYYY-MM-DD>
+  ---
+  ```
+- Filenames are kebab-case of the title: `Acme Corp` -> `acme-corp.md`.
+- Cross-link related pages with `[[wiki-link]]` using the target's title.
+- Prefer UPDATING an existing page (match by title) over creating a duplicate.
+
+## INGEST operation
+Given one source file path:
+1. Read the source.
+2. Identify key entities and concepts.
+3. For each, create a new page OR update the existing page (by title), adding
+   the source to its `sources:` list and weaving `[[cross-refs]]`.
+4. Ensure `wiki/sources/<source-slug>.md` exists summarizing this source and
+   linking the entities/concepts it touches.
+5. Update `wiki/index.md` so every page is listed with a one-line summary.
+6. Append one line to `wiki/log.md`:
+   `## [<YYYY-MM-DD>] ingest | <source title or url>`
+7. Do not edit anything under `raw/`.
+````
+
+`src/wiki_daemon/templates/purpose.md`:
+```markdown
+# Purpose
+
+<!-- Describe what this knowledge base is for and the topics you care about.
+     This steers what the maintainer treats as important during ingest. -->
+
+This is a personal knowledge base.
+```
+
+`src/wiki_daemon/templates/index.md`:
+```markdown
+# Index
+
+<!-- Maintained by the wiki maintainer. One line per page, grouped by category. -->
+
+## Entities
+
+## Concepts
+
+## Sources
+
+## Queries
+```
+
+`src/wiki_daemon/templates/log.md`:
+```markdown
+# Log
+
+<!-- Append-only. One line per operation: "## [YYYY-MM-DD] op | title" -->
+```
+
+- [ ] **Step 2: Write the failing tests**
+
+```python
+# tests/test_scaffold.py
+from wiki_daemon.config import Config
+from wiki_daemon.scaffold import init_vault
+
+
+def test_init_creates_structure(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    init_vault(cfg)
+    assert (cfg.vault / "CLAUDE.md").exists()
+    assert (cfg.vault / "purpose.md").exists()
+    assert (cfg.raw_sources).is_dir()
+    for sub in ("entities", "concepts", "sources", "queries"):
+        assert (cfg.wiki / sub).is_dir()
+    assert (cfg.wiki / "index.md").exists()
+    assert (cfg.wiki / "log.md").exists()
+
+
+def test_init_is_idempotent_and_preserves_content(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    init_vault(cfg)
+    (cfg.vault / "purpose.md").write_text("my custom purpose\n", encoding="utf-8")
+    init_vault(cfg)  # second run must not clobber
+    assert (cfg.vault / "purpose.md").read_text(encoding="utf-8") == "my custom purpose\n"
+```
+
+- [ ] **Step 3: Run to verify failure**
+
+Run: `.venv/bin/pytest tests/test_scaffold.py -v`
+Expected: FAIL — `ModuleNotFoundError: No module named 'wiki_daemon.scaffold'`
+
+- [ ] **Step 4: Implement**
+
+```python
+# src/wiki_daemon/scaffold.py
+"""Create a fresh vault from bundled templates. Idempotent: never clobbers."""
+from __future__ import annotations
+
+from importlib import resources
+from pathlib import Path
+
+from wiki_daemon.config import Config
+
+_TEMPLATES = {
+    "CLAUDE.md": "CLAUDE.md",
+    "purpose.md": "purpose.md",
+    "wiki/index.md": "index.md",
+    "wiki/log.md": "log.md",
+}
+_DIRS = ["raw/sources", "wiki/entities", "wiki/concepts", "wiki/sources", "wiki/queries"]
+
+
+def _template_text(name: str) -> str:
+    return resources.files("wiki_daemon.templates").joinpath(name).read_text(encoding="utf-8")
+
+
+def init_vault(cfg: Config) -> None:
+    for d in _DIRS:
+        (cfg.vault / d).mkdir(parents=True, exist_ok=True)
+    for dest, tmpl in _TEMPLATES.items():
+        target = cfg.vault / dest
+        if target.exists():
+            continue  # idempotent: preserve user edits
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(_template_text(tmpl), encoding="utf-8")
+    cfg.state_dir.mkdir(parents=True, exist_ok=True)
+```
+
+Also create `src/wiki_daemon/templates/__init__.py` (empty) so `importlib.resources` treats it as a package:
+```python
+# src/wiki_daemon/templates/__init__.py
+```
+
+- [ ] **Step 5: Run to verify pass**
+
+Run: `.venv/bin/pytest tests/test_scaffold.py -v`
+Expected: 2 passed.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/wiki_daemon/scaffold.py src/wiki_daemon/templates/
+git commit -m "feat: vault scaffold templates + idempotent wiki init"
+```
+
+---
+
+### Task 7: Claude invocation wrapper
+
+**Files:**
+- Create: `src/wiki_daemon/claude.py`
+- Test: `tests/test_claude.py`
+
+- [ ] **Step 1: Write the failing tests**
+
+```python
+# tests/test_claude.py
+from wiki_daemon.claude import run_claude, ClaudeResult
+
+
+def test_builds_command_and_runs_in_vault(tmp_path):
+    captured = {}
+
+    def fake_runner(cmd, cwd, timeout):
+        captured["cmd"] = cmd
+        captured["cwd"] = cwd
+        captured["timeout"] = timeout
+        return 0, "done\n", ""
+
+    result = run_claude(
+        prompt="ingest this",
+        cwd=tmp_path,
+        allowed_tools=["Read", "Write", "Edit"],
+        claude_bin="claude",
+        timeout=120,
+        runner=fake_runner,
+    )
+    assert isinstance(result, ClaudeResult)
+    assert result.ok is True
+    assert result.stdout == "done\n"
+    assert captured["cwd"] == tmp_path
+    assert captured["cmd"][0] == "claude"
+    assert "-p" in captured["cmd"]
+    assert "ingest this" in captured["cmd"]
+    # allowed-tools passed as a comma-joined value
+    assert "Read,Write,Edit" in captured["cmd"]
+    # headless daemon must not block on permission prompts
+    assert "--dangerously-skip-permissions" in captured["cmd"]
+
+
+def test_nonzero_exit_is_not_ok(tmp_path):
+    def fake_runner(cmd, cwd, timeout):
+        return 1, "", "boom"
+
+    result = run_claude("x", tmp_path, ["Read"], "claude", 10, runner=fake_runner)
+    assert result.ok is False
+    assert result.stderr == "boom"
+```
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `.venv/bin/pytest tests/test_claude.py -v`
+Expected: FAIL — `ModuleNotFoundError: No module named 'wiki_daemon.claude'`
+
+- [ ] **Step 3: Implement**
+
+```python
+# src/wiki_daemon/claude.py
+"""Headless `claude -p` invocation. The runner is injectable for testing."""
+from __future__ import annotations
+
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable
+
+# runner(cmd, cwd, timeout) -> (returncode, stdout, stderr)
+Runner = Callable[[list[str], Path, int], tuple[int, str, str]]
+
+
+@dataclass
+class ClaudeResult:
+    ok: bool
+    returncode: int
+    stdout: str
+    stderr: str
+
+
+def _subprocess_runner(cmd: list[str], cwd: Path, timeout: int) -> tuple[int, str, str]:
+    proc = subprocess.run(
+        cmd, cwd=str(cwd), timeout=timeout,
+        capture_output=True, text=True,
+    )
+    return proc.returncode, proc.stdout, proc.stderr
+
+
+def run_claude(
+    prompt: str,
+    cwd: Path,
+    allowed_tools: list[str],
+    claude_bin: str = "claude",
+    timeout: int = 300,
+    skip_permissions: bool = True,
+    runner: Runner = _subprocess_runner,
+) -> ClaudeResult:
+    cmd = [claude_bin, "-p", prompt, "--allowed-tools", ",".join(allowed_tools)]
+    if skip_permissions:
+        # Headless: the daemon cannot answer interactive permission prompts.
+        cmd.append("--dangerously-skip-permissions")
+    code, out, err = runner(cmd, Path(cwd), timeout)
+    return ClaudeResult(ok=(code == 0), returncode=code, stdout=out, stderr=err)
+```
+
+- [ ] **Step 4: Run to verify pass**
+
+Run: `.venv/bin/pytest tests/test_claude.py -v`
+Expected: 2 passed.
+
+- [ ] **Step 5: Verify the flags against the installed CLI (manual, non-blocking)**
+
+Verified against Claude Code **v2.1.158**: `-p`, `--allowed-tools` (comma- or
+space-separated), and `--dangerously-skip-permissions` all exist as used.
+Sanity-check end-to-end:
+```bash
+claude -p "say hi" --allowed-tools Read --dangerously-skip-permissions
+```
+Expected: a short reply with no permission prompt. If a future CLI changes a flag
+name, update `claude.py` and this test to match.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/wiki_daemon/claude.py tests/test_claude.py
+git commit -m "feat: injectable claude -p invocation wrapper"
+```
+
+---
+
+### Task 8: Ingest prompt builder
+
+**Files:**
+- Create: `src/wiki_daemon/prompts.py`
+- Test: `tests/test_prompts.py`
+
+- [ ] **Step 1: Write the failing tests**
+
+```python
+# tests/test_prompts.py
+from wiki_daemon.prompts import ingest_prompt
+
+
+def test_ingest_prompt_names_the_file_and_schema():
+    p = ingest_prompt("raw/sources/2026-05-31-acme.md")
+    assert "raw/sources/2026-05-31-acme.md" in p
+    assert "CLAUDE.md" in p
+    assert "INGEST" in p.upper()
+```
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `.venv/bin/pytest tests/test_prompts.py -v`
+Expected: FAIL — `ModuleNotFoundError: No module named 'wiki_daemon.prompts'`
+
+- [ ] **Step 3: Implement**
+
+```python
+# src/wiki_daemon/prompts.py
+"""Thin operation prompts. The real algorithm lives in the vault's CLAUDE.md."""
+from __future__ import annotations
+
+
+def ingest_prompt(source_rel_path: str) -> str:
+    return (
+        "Follow the INGEST operation defined in CLAUDE.md exactly.\n"
+        f"Ingest this single source file into the wiki: {source_rel_path}\n"
+        "Create/update the relevant entity and concept pages, ensure a source "
+        "summary page exists, update wiki/index.md, and append to wiki/log.md. "
+        "Do not modify anything under raw/."
+    )
+```
+
+- [ ] **Step 4: Run to verify pass**
+
+Run: `.venv/bin/pytest tests/test_prompts.py -v`
+Expected: 1 passed.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/wiki_daemon/prompts.py tests/test_prompts.py
+git commit -m "feat: ingest prompt builder"
+```
+
+---
+
+### Task 9: Ingest orchestration + verification
+
+**Files:**
+- Create: `src/wiki_daemon/ops.py`
+- Test: `tests/test_ops.py`
+
+This is the heart of M1: orchestrate materialize → run claude → **verify** → mark processed. The claude runner is faked to *simulate* a well-behaved (or misbehaving) maintainer by writing the expected files.
+
+- [ ] **Step 1: Write the failing tests**
+
+```python
+# tests/test_ops.py
+import pytest
+from wiki_daemon.config import Config
+from wiki_daemon.ops import ingest, IngestResult
+from wiki_daemon.state import StateStore
+
+
+def _make_source(cfg, name="2026-05-31-acme.md"):
+    cfg.raw_sources.mkdir(parents=True, exist_ok=True)
+    p = cfg.raw_sources / name
+    p.write_text("---\ntype: source\ntitle: Acme\n---\nAcme makes widgets.\n",
+                 encoding="utf-8")
+    return p
+
+
+def _good_claude(cfg, source_name):
+    """A fake runner that behaves like a compliant maintainer."""
+    def runner(cmd, cwd, timeout):
+        slug = source_name.replace(".md", "")
+        (cfg.wiki / "sources" / f"{slug}.md").write_text(
+            "---\ntype: source\ntitle: Acme\n---\nsummary\n", encoding="utf-8")
+        (cfg.wiki / "index.md").write_text("# Index\n- Acme\n", encoding="utf-8")
+        (cfg.wiki / "log.md").write_text("# Log\n## [2026-05-31] ingest | Acme\n",
+                                         encoding="utf-8")
+        return 0, "ok\n", ""
+    return runner
+
+
+def _lazy_claude(cmd, cwd, timeout):
+    """A fake runner that returns success but writes nothing (misbehaves)."""
+    return 0, "ok\n", ""
+
+
+def test_ingest_success_marks_processed(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    from wiki_daemon.scaffold import init_vault
+    init_vault(cfg)
+    src = _make_source(cfg)
+    store = StateStore(cfg.processed_json)
+
+    result = ingest(cfg, src, store=store, runner=_good_claude(cfg, src.name))
+
+    assert isinstance(result, IngestResult)
+    assert result.ok is True
+    assert (cfg.wiki / "sources" / "2026-05-31-acme.md").exists()
+    # sha recorded so a re-run is skipped
+    from wiki_daemon.sources import read_source
+    assert store.is_processed(read_source(src).sha256)
+
+
+def test_ingest_verification_fails_when_no_summary(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    from wiki_daemon.scaffold import init_vault
+    init_vault(cfg)
+    src = _make_source(cfg)
+    store = StateStore(cfg.processed_json)
+
+    result = ingest(cfg, src, store=store, runner=_lazy_claude)
+
+    assert result.ok is False
+    assert "summary" in result.reason.lower()
+    # NOT marked processed -> will be retried later
+    from wiki_daemon.sources import read_source
+    assert store.is_processed(read_source(src).sha256) is False
+
+
+def test_ingest_skips_already_processed(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    from wiki_daemon.scaffold import init_vault
+    init_vault(cfg)
+    src = _make_source(cfg)
+    store = StateStore(cfg.processed_json)
+    from wiki_daemon.sources import read_source
+    store.mark_processed(read_source(src).sha256, str(src))
+
+    called = {"n": 0}
+    def counting_runner(cmd, cwd, timeout):
+        called["n"] += 1
+        return 0, "", ""
+
+    result = ingest(cfg, src, store=store, runner=counting_runner)
+    assert result.skipped is True
+    assert called["n"] == 0
+```
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `.venv/bin/pytest tests/test_ops.py -v`
+Expected: FAIL — `ModuleNotFoundError: No module named 'wiki_daemon.ops'`
+
+- [ ] **Step 3: Implement**
+
+```python
+# src/wiki_daemon/ops.py
+"""Ingest orchestration: materialize -> claude -> verify -> mark processed."""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+
+from wiki_daemon.claude import Runner, run_claude
+from wiki_daemon.config import Config
+from wiki_daemon.prompts import ingest_prompt
+from wiki_daemon.sources import read_source
+from wiki_daemon.state import StateStore
+
+_ALLOWED_TOOLS = ["Read", "Write", "Edit", "Glob", "Grep"]
+
+
+@dataclass
+class IngestResult:
+    ok: bool
+    skipped: bool = False
+    reason: str = ""
+
+
+def _source_slug(source_path: Path) -> str:
+    return source_path.name[:-3] if source_path.name.endswith(".md") else source_path.name
+
+
+def _verify(cfg: Config, source_path: Path) -> tuple[bool, str]:
+    summary = cfg.wiki / "sources" / f"{_source_slug(source_path)}.md"
+    if not summary.exists():
+        return False, "no source summary page was created"
+    if not (cfg.wiki / "index.md").exists():
+        return False, "index.md missing"
+    if not (cfg.wiki / "log.md").exists():
+        return False, "log.md missing"
+    return True, ""
+
+
+def ingest(
+    cfg: Config,
+    source_path: Path,
+    *,
+    store: StateStore,
+    runner: Runner | None = None,
+) -> IngestResult:
+    """Ingest a file that is already materialized + stable.
+
+    iCloud materialization and the stability gate are the daemon's job
+    (see `icloud.prepare_source`, wired in Task 16); this stays pure so it is
+    fast to test and reusable by the M1 CLI path on a local vault.
+    """
+    source_path = Path(source_path)
+    src = read_source(source_path)
+    if store.is_processed(src.sha256):
+        return IngestResult(ok=True, skipped=True)
+
+    rel = source_path.relative_to(cfg.vault).as_posix()
+    kwargs = {} if runner is None else {"runner": runner}
+    result = run_claude(
+        prompt=ingest_prompt(rel),
+        cwd=cfg.vault,
+        allowed_tools=_ALLOWED_TOOLS,
+        claude_bin=cfg.claude_bin,
+        **kwargs,
+    )
+    if not result.ok:
+        return IngestResult(ok=False, reason=f"claude failed: {result.stderr[:200]}")
+
+    ok, reason = _verify(cfg, source_path)
+    if not ok:
+        return IngestResult(ok=False, reason=reason)
+
+    store.mark_processed(src.sha256, str(source_path))
+    return IngestResult(ok=True)
+```
+
+`ops.py` has **no iCloud dependency** — materialization/stability are wired in
+the daemon worker (Task 16). This removes any task-ordering coupling with Task 10.
+
+- [ ] **Step 4: Run to verify pass**
+
+Run: `.venv/bin/pytest tests/test_ops.py -v`
+Expected: 3 passed.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/wiki_daemon/ops.py tests/test_ops.py
+git commit -m "feat: ingest orchestration with post-run verification"
+```
+
+---
+
+### Task 10: iCloud materialization + stability gate
+
+**Files:**
+- Create/Replace: `src/wiki_daemon/icloud.py`
+- Test: `tests/test_icloud.py`
+
+All side effects (`os.stat`, subprocess, sleep) are injected so this is testable on the arm64 dev machine. **Behavior must still be validated on the Intel Sequoia host** (Task 13).
+
+- [ ] **Step 1: Write the failing tests**
+
+```python
+# tests/test_icloud.py
+from wiki_daemon import icloud
+
+
+class FakeStat:
+    def __init__(self, st_flags, st_size):
+        self.st_flags = st_flags
+        self.st_size = st_size
+        self.st_mtime = 1.0
+
+
+def test_is_dataless_reads_sf_dataless_bit(tmp_path):
+    p = tmp_path / "f.md"
+    p.write_text("x")
+    dataless = icloud.is_dataless(p, stat_fn=lambda _p: FakeStat(icloud.SF_DATALESS, 10))
+    materialized = icloud.is_dataless(p, stat_fn=lambda _p: FakeStat(0, 10))
+    assert dataless is True
+    assert materialized is False
+
+
+def test_materialize_uses_brctl_then_clears(tmp_path):
+    p = tmp_path / "f.md"
+    p.write_text("x")
+    calls = []
+
+    def fake_run(cmd):
+        calls.append(cmd)
+        return 0  # success
+
+    flags = iter([icloud.SF_DATALESS, 0])  # dataless, then materialized
+    icloud.ensure_materialized(
+        p,
+        stat_fn=lambda _p: FakeStat(next(flags), 10),
+        run_fn=fake_run,
+        sleep_fn=lambda _s: None,
+    )
+    assert calls[0][0] == "brctl"
+    assert calls[0][1] == "download"
+
+
+def test_materialize_falls_back_to_fileproviderctl(tmp_path):
+    p = tmp_path / "f.md"
+    p.write_text("x")
+    calls = []
+
+    def fake_run(cmd):
+        calls.append(cmd)
+        return 0 if cmd[0] == "fileproviderctl" else 1  # brctl fails
+
+    flags = iter([icloud.SF_DATALESS, 0])
+    icloud.ensure_materialized(
+        p,
+        stat_fn=lambda _p: FakeStat(next(flags), 10),
+        run_fn=fake_run,
+        sleep_fn=lambda _s: None,
+    )
+    assert any(c[0] == "fileproviderctl" for c in calls)
+
+
+def test_wait_stable_true_when_size_unchanged(tmp_path):
+    p = tmp_path / "f.md"
+    p.write_text("x")
+    stable = icloud.wait_stable(
+        p, window_checks=2, interval=0,
+        stat_fn=lambda _p: FakeStat(0, 100),
+        sleep_fn=lambda _s: None,
+    )
+    assert stable is True
+
+
+def test_wait_stable_false_when_size_changes(tmp_path):
+    p = tmp_path / "f.md"
+    p.write_text("x")
+    sizes = iter([100, 200, 300, 400, 500, 600])
+    stable = icloud.wait_stable(
+        p, window_checks=2, interval=0, max_checks=3,
+        stat_fn=lambda _p: FakeStat(0, next(sizes)),
+        sleep_fn=lambda _s: None,
+    )
+    assert stable is False
+
+
+def test_prepare_source_materialized_and_stable(tmp_path):
+    p = tmp_path / "f.md"
+    p.write_text("x")
+    ready = icloud.prepare_source(
+        p,
+        stat_fn=lambda _p: FakeStat(0, 100),   # materialized + constant size
+        run_fn=lambda cmd: 0,
+        sleep_fn=lambda _s: None,
+    )
+    assert ready is True
+```
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `.venv/bin/pytest tests/test_icloud.py -v`
+Expected: FAIL — missing `is_dataless`/`wait_stable` (or AttributeError on the stub).
+
+- [ ] **Step 3: Implement (replace the Task 9 stub entirely)**
+
+```python
+# src/wiki_daemon/icloud.py
+"""iCloud Drive handling for macOS Sequoia (Intel x86_64 host).
+
+Not-downloaded files are "dataless" APFS files (no .icloud stubs on Sonoma+).
+Detect via SF_DATALESS in st_flags; materialize via `brctl download`
+(fallback `fileproviderctl materialize`). All side effects are injectable.
+"""
+from __future__ import annotations
+
+import os
+import subprocess
+import time
+from pathlib import Path
+from typing import Callable
+
+SF_DATALESS = 0x40000000  # APFS dataless flag (Apple TN3150)
+
+StatFn = Callable[[Path], os.stat_result]
+RunFn = Callable[[list[str]], int]
+SleepFn = Callable[[float], None]
+
+
+def _default_run(cmd: list[str]) -> int:
+    return subprocess.run(cmd, capture_output=True, text=True).returncode
+
+
+def is_dataless(path: Path, *, stat_fn: StatFn = os.stat) -> bool:
+    st = stat_fn(path)
+    return bool(getattr(st, "st_flags", 0) & SF_DATALESS)
+
+
+def ensure_materialized(
+    path: Path,
+    *,
+    stat_fn: StatFn = os.stat,
+    run_fn: RunFn = _default_run,
+    sleep_fn: SleepFn = time.sleep,
+    max_polls: int = 30,
+    interval: float = 0.5,
+) -> None:
+    path = Path(path)
+    if not is_dataless(path, stat_fn=stat_fn):
+        return
+    if run_fn(["brctl", "download", str(path)]) != 0:
+        run_fn(["fileproviderctl", "materialize", str(path)])
+    for _ in range(max_polls):
+        if not is_dataless(path, stat_fn=stat_fn):
+            return
+        sleep_fn(interval)
+    # fall through: caller will read; a still-dataless read will raise on access
+
+
+def wait_stable(
+    path: Path,
+    *,
+    window_checks: int = 2,
+    interval: float = 1.0,
+    max_checks: int = 20,
+    stat_fn: StatFn = os.stat,
+    sleep_fn: SleepFn = time.sleep,
+) -> bool:
+    """True once size+mtime are unchanged for `window_checks` consecutive reads."""
+    last = None
+    stable_run = 0
+    for _ in range(max_checks):
+        st = stat_fn(path)
+        sig = (st.st_size, st.st_mtime)
+        if sig == last:
+            stable_run += 1
+            if stable_run >= window_checks:
+                return True
+        else:
+            stable_run = 0
+            last = sig
+        sleep_fn(interval)
+    return False
+
+
+def prepare_source(
+    path: Path,
+    *,
+    stat_fn: StatFn = os.stat,
+    run_fn: RunFn = _default_run,
+    sleep_fn: SleepFn = time.sleep,
+) -> bool:
+    """Make a raw source ready to read: materialize, then confirm it's stable.
+
+    Returns True when the file is materialized and stable; False if it never
+    settled (caller leaves it for the next reconcile sweep).
+    """
+    ensure_materialized(path, stat_fn=stat_fn, run_fn=run_fn, sleep_fn=sleep_fn)
+    return wait_stable(path, stat_fn=stat_fn, sleep_fn=sleep_fn)
+```
+
+- [ ] **Step 4: Run to verify pass**
+
+Run: `.venv/bin/pytest tests/test_icloud.py tests/test_ops.py -v`
+Expected: all pass (icloud + ops).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/wiki_daemon/icloud.py tests/test_icloud.py
+git commit -m "feat: iCloud dataless detection, materialize, stability gate"
+```
+
+---
+
+### Task 11: `wiki` CLI (init / ingest / status)
+
+**Files:**
+- Create: `src/wiki_daemon/cli.py`
+- Test: `tests/test_cli.py`
+
+- [ ] **Step 1: Write the failing tests**
+
+```python
+# tests/test_cli.py
+from wiki_daemon.cli import build_parser, cmd_init
+from wiki_daemon.config import Config
+
+
+def test_parser_has_subcommands():
+    parser = build_parser()
+    ns = parser.parse_args(["init", "--vault", "/tmp/v"])
+    assert ns.command == "init"
+    assert ns.vault == "/tmp/v"
+
+
+def test_cmd_init_scaffolds(tmp_path, capsys):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    rc = cmd_init(cfg)
+    assert rc == 0
+    assert (cfg.vault / "CLAUDE.md").exists()
+    out = capsys.readouterr().out
+    assert "initialized" in out.lower()
+```
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `.venv/bin/pytest tests/test_cli.py -v`
+Expected: FAIL — `ModuleNotFoundError: No module named 'wiki_daemon.cli'`
+
+- [ ] **Step 3: Implement**
+
+```python
+# src/wiki_daemon/cli.py
+"""`wiki` CLI. In M1 this runs ops in-process (no daemon)."""
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+from wiki_daemon.config import Config
+from wiki_daemon.ops import ingest
+from wiki_daemon.scaffold import init_vault
+from wiki_daemon.state import StateStore
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="wiki")
+    p.add_argument("--vault", help="path to the vault", default=None)
+    sub = p.add_subparsers(dest="command", required=True)
+    sub.add_parser("init", help="scaffold a new vault")
+    ing = sub.add_parser("ingest", help="ingest one source file")
+    ing.add_argument("file", help="path to a raw source .md")
+    sub.add_parser("status", help="show processed count")
+    return p
+
+
+def _config(ns) -> Config:
+    if not ns.vault:
+        print("error: --vault is required", file=sys.stderr)
+        raise SystemExit(2)
+    return Config(vault=Path(ns.vault))
+
+
+def cmd_init(cfg: Config) -> int:
+    init_vault(cfg)
+    print(f"initialized vault at {cfg.vault}")
+    return 0
+
+
+def cmd_ingest(cfg: Config, file: str) -> int:
+    store = StateStore(cfg.processed_json)
+    result = ingest(cfg, Path(file), store=store)
+    if result.skipped:
+        print("skipped (already processed)")
+        return 0
+    if result.ok:
+        print("ingested")
+        return 0
+    print(f"ingest failed: {result.reason}", file=sys.stderr)
+    return 1
+
+
+def cmd_status(cfg: Config) -> int:
+    store = StateStore(cfg.processed_json)
+    print(f"processed: {len(store._data)}")  # noqa: SLF001
+    return 0
+
+
+def main(argv=None) -> int:
+    ns = build_parser().parse_args(argv)
+    cfg = _config(ns)
+    if ns.command == "init":
+        return cmd_init(cfg)
+    if ns.command == "ingest":
+        return cmd_ingest(cfg, ns.file)
+    if ns.command == "status":
+        return cmd_status(cfg)
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+```
+
+- [ ] **Step 4: Run to verify pass**
+
+Run: `.venv/bin/pytest tests/test_cli.py -v`
+Expected: 2 passed.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/wiki_daemon/cli.py tests/test_cli.py
+git commit -m "feat: wiki CLI (init/ingest/status) in-process"
+```
+
+---
+
+### Task 12: M1 acceptance — prove ingest QUALITY on a real clip (manual)
+
+This is the de-risking gate. No unit test asserts page quality; you inspect it.
+
+- [ ] **Step 1: Initialize a scratch vault and add a real clip**
+
+Run:
+```bash
+.venv/bin/wiki --vault /tmp/scratch-vault init
+```
+Then create a realistic source (paste a real clipped tweet/article body):
+```bash
+cat > "/tmp/scratch-vault/raw/sources/2026-05-31-sample.md" <<'EOF'
+---
+type: source
+source_url: https://x.com/example/status/123
+captured_at: 2026-05-31T10:00:00Z
+via: ios-share
+title: Example post
+---
+<paste a real tweet/article body here>
+EOF
+```
+
+- [ ] **Step 2: Edit `purpose.md` to describe your real interests**
+
+Edit `/tmp/scratch-vault/purpose.md` so the maintainer knows what matters.
+
+- [ ] **Step 3: Run ingest against the real LLM**
+
+Run:
+```bash
+.venv/bin/wiki --vault /tmp/scratch-vault ingest \
+  "/tmp/scratch-vault/raw/sources/2026-05-31-sample.md"
+```
+Expected: `ingested`.
+
+- [ ] **Step 4: Inspect the output by hand**
+
+Check:
+- `wiki/sources/2026-05-31-sample.md` exists and summarizes the source.
+- New `wiki/entities/*.md` / `wiki/concepts/*.md` pages are sensible.
+- `[[wiki-links]]` connect related pages.
+- `wiki/index.md` lists the new pages; `wiki/log.md` got an ingest line.
+
+- [ ] **Step 5: Tune `CLAUDE.md` and the template, re-run, repeat**
+
+If pages are low quality, edit the vault's `CLAUDE.md` (and the bundled
+`src/wiki_daemon/templates/CLAUDE.md`), delete the scratch `wiki/`, re-init, and
+re-ingest until quality is good. Commit template improvements:
+```bash
+git add src/wiki_daemon/templates/CLAUDE.md
+git commit -m "tune: improve ingest maintainer instructions"
+```
+
+- [ ] **Step 6: Re-run the same ingest to confirm dedupe**
+
+Run the Step 3 command again.
+Expected: `skipped (already processed)`.
+
+**M1 gate:** do not start M2 until ingest quality is satisfactory.
+
+---
+
+## MILESTONE 2 — Daemon + iCloud watcher (autonomous ingest)
+
+### Task 13: Validate iCloud handling on the Intel Sequoia host (manual)
+
+**Files:** none (validation only).
+
+- [ ] **Step 1: On the Intel Sequoia home Mac, install and init against the real iCloud vault path**
+
+Run (on the home Mac):
+```bash
+.venv/bin/wiki --vault "$HOME/Library/Mobile Documents/com~apple~CloudDocs/<your-vault>" init
+```
+
+- [ ] **Step 2: Confirm dataless detection works**
+
+Evict a test file (Finder ▸ right-click ▸ *Remove Download*), then:
+```bash
+python3 -c "from wiki_daemon.icloud import is_dataless; print(is_dataless('<path to evicted file>'))"
+```
+Expected: `True`. After `brctl download "<path>"`, expect `False`.
+
+- [ ] **Step 3: Pin the vault (one-time setup)**
+
+In Finder, right-click the vault folder ▸ **Keep Downloaded**. This keeps files materialized so dataless handling is only a fallback. Document this in `README.md`.
+
+- [ ] **Step 4: Commit the README setup note**
+
+```bash
+git add README.md
+git commit -m "docs: Intel Sequoia setup (pin vault, iCloud validation)"
+```
+
+---
+
+### Task 14: Job queue (persisted serial + crash recovery)
+
+**Files:**
+- Create: `src/wiki_daemon/queue.py`
+- Test: `tests/test_queue.py`
+
+- [ ] **Step 1: Write the failing tests**
+
+```python
+# tests/test_queue.py
+from wiki_daemon.queue import JobQueue, Job
+
+
+def test_enqueue_dequeue_fifo(tmp_path):
+    q = JobQueue(tmp_path / "queue")
+    q.enqueue(Job(type="ingest", payload="a.md"))
+    q.enqueue(Job(type="ingest", payload="b.md"))
+    assert q.dequeue().payload == "a.md"
+    assert q.dequeue().payload == "b.md"
+    assert q.dequeue() is None
+
+
+def test_dedupe_same_payload_pending(tmp_path):
+    q = JobQueue(tmp_path / "queue")
+    q.enqueue(Job(type="ingest", payload="a.md"))
+    q.enqueue(Job(type="ingest", payload="a.md"))  # duplicate while pending
+    assert q.dequeue().payload == "a.md"
+    assert q.dequeue() is None
+
+
+def test_inflight_recovered_on_reload(tmp_path):
+    qdir = tmp_path / "queue"
+    q = JobQueue(qdir)
+    q.enqueue(Job(type="ingest", payload="a.md"))
+    job = q.dequeue()        # now in-flight, not completed
+    assert job.payload == "a.md"
+    q2 = JobQueue(qdir)      # simulate crash + restart
+    recovered = q2.dequeue()
+    assert recovered is not None
+    assert recovered.payload == "a.md"
+
+
+def test_complete_removes_job(tmp_path):
+    qdir = tmp_path / "queue"
+    q = JobQueue(qdir)
+    q.enqueue(Job(type="ingest", payload="a.md"))
+    job = q.dequeue()
+    q.complete(job)
+    q2 = JobQueue(qdir)
+    assert q2.dequeue() is None
+```
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `.venv/bin/pytest tests/test_queue.py -v`
+Expected: FAIL — `ModuleNotFoundError: No module named 'wiki_daemon.queue'`
+
+- [ ] **Step 3: Implement**
+
+```python
+# src/wiki_daemon/queue.py
+"""File-backed serial job queue with crash recovery.
+
+Each job is a JSON file in the queue dir. Status is encoded in the filename
+prefix: `pending-` or `inflight-`. On reload, inflight jobs are re-pending so a
+crash mid-job re-runs it (ingest is idempotent). Ordering is by enqueue index.
+"""
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, asdict
+from pathlib import Path
+
+
+@dataclass
+class Job:
+    type: str
+    payload: str
+
+
+class JobQueue:
+    def __init__(self, queue_dir: Path):
+        self._dir = Path(queue_dir)
+        self._dir.mkdir(parents=True, exist_ok=True)
+        self._seq = self._max_seq()
+        self._recover()
+
+    def _max_seq(self) -> int:
+        best = 0
+        for f in self._dir.glob("*.json"):
+            try:
+                best = max(best, int(f.stem.split("-")[1]))
+            except (IndexError, ValueError):
+                continue
+        return best
+
+    def _recover(self) -> None:
+        for f in self._dir.glob("inflight-*.json"):
+            f.rename(f.with_name(f.name.replace("inflight-", "pending-", 1)))
+
+    def _pending_payloads(self) -> set[str]:
+        out = set()
+        for f in self._dir.glob("pending-*.json"):
+            out.add(json.loads(f.read_text())["payload"])
+        return out
+
+    def enqueue(self, job: Job) -> None:
+        if job.payload in self._pending_payloads():
+            return  # dedupe identical pending payloads
+        self._seq += 1
+        name = f"pending-{self._seq:08d}-{job.type}.json"
+        (self._dir / name).write_text(json.dumps(asdict(job)), encoding="utf-8")
+
+    def dequeue(self) -> Job | None:
+        pend = sorted(self._dir.glob("pending-*.json"))
+        if not pend:
+            return None
+        f = pend[0]
+        inflight = f.with_name(f.name.replace("pending-", "inflight-", 1))
+        f.rename(inflight)
+        data = json.loads(inflight.read_text())
+        return Job(**data)
+
+    def complete(self, job: Job) -> None:
+        for f in self._dir.glob("inflight-*.json"):
+            if json.loads(f.read_text())["payload"] == job.payload:
+                f.unlink()
+                return
+```
+
+- [ ] **Step 4: Run to verify pass**
+
+Run: `.venv/bin/pytest tests/test_queue.py -v`
+Expected: 4 passed.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/wiki_daemon/queue.py tests/test_queue.py
+git commit -m "feat: file-backed serial job queue with crash recovery"
+```
+
+---
+
+### Task 15: Watcher logic (path filter + reconcile diff)
+
+**Files:**
+- Create: `src/wiki_daemon/watcher.py`
+- Test: `tests/test_watcher.py`
+
+Keep the *logic* (what to enqueue) in pure functions; the FSEvents glue (Task 16) just calls them. This avoids materializing dataless directories by stat-checking individual `.md` files rather than recursive globbing.
+
+- [ ] **Step 1: Write the failing tests**
+
+```python
+# tests/test_watcher.py
+from wiki_daemon.watcher import is_relevant, files_to_ingest
+from wiki_daemon.config import Config
+from wiki_daemon.state import StateStore
+from wiki_daemon.sources import read_source
+
+
+def test_is_relevant_only_md_in_sources(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    cfg.raw_sources.mkdir(parents=True)
+    md = cfg.raw_sources / "a.md"
+    md.write_text("x")
+    assert is_relevant(cfg, md) is True
+    assert is_relevant(cfg, cfg.raw_sources / ".DS_Store") is False
+    assert is_relevant(cfg, cfg.raw_sources / "note.txt") is False
+    assert is_relevant(cfg, cfg.wiki / "index.md") is False  # wiki/ is not watched
+
+
+def test_files_to_ingest_excludes_processed(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    cfg.raw_sources.mkdir(parents=True)
+    a = cfg.raw_sources / "a.md"; a.write_text("aaa")
+    b = cfg.raw_sources / "b.md"; b.write_text("bbb")
+    store = StateStore(cfg.processed_json)
+    store.mark_processed(read_source(a).sha256, str(a))
+
+    pending = files_to_ingest(cfg, store)
+    names = {p.name for p in pending}
+    assert names == {"b.md"}
+```
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `.venv/bin/pytest tests/test_watcher.py -v`
+Expected: FAIL — `ModuleNotFoundError: No module named 'wiki_daemon.watcher'`
+
+- [ ] **Step 3: Implement**
+
+```python
+# src/wiki_daemon/watcher.py
+"""Watcher logic: which files are relevant, and the reconcile diff.
+
+The reconcile sweep stat-checks individual .md files (never a recursive ** glob)
+so it does not accidentally materialize dataless directories on iCloud.
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+from wiki_daemon.config import Config
+from wiki_daemon.sources import read_source
+from wiki_daemon.state import StateStore
+
+
+def is_relevant(cfg: Config, path: Path) -> bool:
+    path = Path(path)
+    if path.suffix != ".md":
+        return False
+    try:
+        path.relative_to(cfg.raw_sources)
+    except ValueError:
+        return False
+    return True
+
+
+def files_to_ingest(cfg: Config, store: StateStore) -> list[Path]:
+    """Reconcile: every .md in raw/sources not yet processed (by content hash)."""
+    out: list[Path] = []
+    if not cfg.raw_sources.exists():
+        return out
+    for p in sorted(cfg.raw_sources.glob("*.md")):
+        if not p.is_file():
+            continue
+        if not store.is_processed(read_source(p).sha256):
+            out.append(p)
+    return out
+```
+
+Note: `glob("*.md")` is a single-level, non-recursive listing of the sources dir only — it does not traverse into dataless subdirectories.
+
+- [ ] **Step 4: Run to verify pass**
+
+Run: `.venv/bin/pytest tests/test_watcher.py -v`
+Expected: 2 passed.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/wiki_daemon/watcher.py tests/test_watcher.py
+git commit -m "feat: watcher path filter + reconcile diff (non-materializing)"
+```
+
+---
+
+### Task 16: Daemon serve loop (wire watcher → queue → worker)
+
+**Files:**
+- Create: `src/wiki_daemon/daemon.py`
+- Create: `src/wiki_daemon/__main__.py`
+- Test: `tests/test_daemon.py`
+
+The worker pulls jobs and calls `ingest`. We test the worker drain logic with a fake ingest; the FSEvents observer + sleep loop are thin and tested manually in Task 17.
+
+- [ ] **Step 1: Write the failing tests**
+
+```python
+# tests/test_daemon.py
+from wiki_daemon.config import Config
+from wiki_daemon.queue import JobQueue, Job
+from wiki_daemon.daemon import drain_once, enqueue_reconcile
+from wiki_daemon.state import StateStore
+
+
+def test_enqueue_reconcile_adds_unprocessed(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    cfg.raw_sources.mkdir(parents=True)
+    (cfg.raw_sources / "a.md").write_text("aaa")
+    q = JobQueue(cfg.queue_dir)
+    store = StateStore(cfg.processed_json)
+
+    enqueue_reconcile(cfg, q, store)
+    job = q.dequeue()
+    assert job is not None and job.payload.endswith("a.md")
+
+
+def test_drain_once_runs_and_completes(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    cfg.raw_sources.mkdir(parents=True)
+    q = JobQueue(cfg.queue_dir)
+    q.enqueue(Job(type="ingest", payload=str(cfg.raw_sources / "a.md")))
+    seen = []
+
+    def fake_ingest(config, path):
+        seen.append(path)
+        class R:  # minimal result
+            ok = True; skipped = False; reason = ""
+        return R()
+
+    # prepare_fn injected True: the payload path doesn't exist on disk here
+    drained = drain_once(cfg, q, ingest_fn=fake_ingest, prepare_fn=lambda p: True)
+    assert drained == 1
+    assert str(seen[0]).endswith("a.md")
+    assert q.dequeue() is None  # completed and removed
+
+
+def test_drain_skips_when_not_ready(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    cfg.raw_sources.mkdir(parents=True)
+    q = JobQueue(cfg.queue_dir)
+    q.enqueue(Job(type="ingest", payload=str(cfg.raw_sources / "a.md")))
+    ingested = []
+
+    def fake_ingest(config, path):
+        ingested.append(path)
+        class R: ok = True; skipped = False; reason = ""
+        return R()
+
+    drained = drain_once(cfg, q, ingest_fn=fake_ingest, prepare_fn=lambda p: False)
+    assert drained == 0           # not ingested...
+    assert ingested == []
+    assert q.dequeue() is None    # ...but job removed; reconcile re-enqueues later
+```
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `.venv/bin/pytest tests/test_daemon.py -v`
+Expected: FAIL — `ModuleNotFoundError: No module named 'wiki_daemon.daemon'`
+
+- [ ] **Step 3: Implement**
+
+```python
+# src/wiki_daemon/daemon.py
+"""Serve loop: FSEvents + periodic reconcile feed a serial write-worker."""
+from __future__ import annotations
+
+import time
+from pathlib import Path
+
+from watchdog.events import FileSystemEventHandler
+from watchdog.observers import Observer
+
+from wiki_daemon.config import Config
+from wiki_daemon.icloud import prepare_source
+from wiki_daemon.ops import ingest as _ingest
+from wiki_daemon.queue import Job, JobQueue
+from wiki_daemon.state import StateStore
+from wiki_daemon.watcher import files_to_ingest, is_relevant
+
+
+def enqueue_reconcile(cfg: Config, q: JobQueue, store: StateStore) -> int:
+    n = 0
+    for p in files_to_ingest(cfg, store):
+        q.enqueue(Job(type="ingest", payload=str(p)))
+        n += 1
+    return n
+
+
+def drain_once(cfg: Config, q: JobQueue, *, ingest_fn=None, prepare_fn=prepare_source) -> int:
+    """Run pending jobs serially. Materialize + stability-gate each file before
+    ingest; if not ready, drop the job (the reconcile sweep re-enqueues later).
+    Returns the number of files actually ingested."""
+    store = StateStore(cfg.processed_json)
+    run = ingest_fn or (lambda config, path: _ingest(config, Path(path), store=store))
+    count = 0
+    while True:
+        job = q.dequeue()
+        if job is None:
+            break
+        if prepare_fn(Path(job.payload)):
+            run(cfg, job.payload)
+            count += 1
+        q.complete(job)
+    return count
+
+
+class _Handler(FileSystemEventHandler):
+    def __init__(self, cfg: Config, q: JobQueue):
+        self._cfg = cfg
+        self._q = q
+
+    def _maybe(self, path_str: str) -> None:
+        p = Path(path_str)
+        if is_relevant(self._cfg, p):
+            self._q.enqueue(Job(type="ingest", payload=str(p)))
+
+    def on_created(self, event):
+        if not event.is_directory:
+            self._maybe(event.src_path)
+
+    def on_moved(self, event):
+        if not event.is_directory:
+            self._maybe(event.dest_path)
+
+
+def serve(cfg: Config, *, reconcile_interval: float = 300.0, tick: float = 2.0) -> None:
+    cfg.state_dir.mkdir(parents=True, exist_ok=True)
+    q = JobQueue(cfg.queue_dir)
+    store = StateStore(cfg.processed_json)
+
+    enqueue_reconcile(cfg, q, store)  # startup sweep (backstop)
+    observer = Observer()
+    observer.schedule(_Handler(cfg, q), str(cfg.raw_sources), recursive=False)
+    observer.start()
+    last_reconcile = time.monotonic()
+    try:
+        while True:
+            drain_once(cfg, q)
+            if time.monotonic() - last_reconcile >= reconcile_interval:
+                enqueue_reconcile(cfg, q, StateStore(cfg.processed_json))
+                last_reconcile = time.monotonic()
+            time.sleep(tick)
+    finally:
+        observer.stop()
+        observer.join()
+```
+
+```python
+# src/wiki_daemon/__main__.py
+"""`wiki-daemon serve --vault <path>` entrypoint."""
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+
+from wiki_daemon.config import Config
+from wiki_daemon.daemon import serve
+
+
+def main(argv=None) -> int:
+    p = argparse.ArgumentParser(prog="wiki-daemon")
+    sub = p.add_subparsers(dest="command", required=True)
+    s = sub.add_parser("serve", help="watch the vault and ingest autonomously")
+    s.add_argument("--vault", required=True)
+    s.add_argument("--reconcile-interval", type=float, default=300.0)
+    ns = p.parse_args(argv)
+    cfg = Config(vault=Path(ns.vault))
+    serve(cfg, reconcile_interval=ns.reconcile_interval)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+```
+
+- [ ] **Step 4: Run to verify pass**
+
+Run: `.venv/bin/pytest tests/test_daemon.py -v`
+Expected: 3 passed.
+
+- [ ] **Step 5: Run the full suite**
+
+Run: `.venv/bin/pytest -q`
+Expected: all tests pass.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/wiki_daemon/daemon.py src/wiki_daemon/__main__.py tests/test_daemon.py
+git commit -m "feat: daemon serve loop (watcher + reconcile + serial worker)"
+```
+
+---
+
+### Task 17: M2 acceptance — autonomous ingest end-to-end on the Intel host (manual)
+
+- [ ] **Step 1: Start the daemon against the real iCloud vault**
+
+Run (on the Intel Sequoia host):
+```bash
+.venv/bin/wiki-daemon serve \
+  --vault "$HOME/Library/Mobile Documents/com~apple~CloudDocs/<your-vault>"
+```
+
+- [ ] **Step 2: Clip from the iOS app (or drop a .md into raw/sources/)**
+
+Share a tweet via the WikiReader iOS app into the vault. Wait for iCloud to sync to the Mac.
+
+- [ ] **Step 3: Confirm autonomous ingest**
+
+Expected within a reconcile interval: new pages appear under `wiki/`, `index.md`
+and `log.md` update, and `wiki status` shows the processed count increment.
+
+- [ ] **Step 4: Crash-recovery check**
+
+Drop a file, kill the daemon (`Ctrl-C`) immediately, restart it. Expected: the
+startup reconcile sweep enqueues the unprocessed file and it ingests.
+
+- [ ] **Step 5: Tag the milestone**
+
+```bash
+git tag m2-autonomous-ingest
+git commit --allow-empty -m "chore: M2 autonomous ingest validated on Intel Sequoia host"
+```
+
+---
+
+## Self-Review Notes (for the implementer)
+
+- **Layering:** `ops.ingest` is pure (read → claude → verify → mark) with **no iCloud dependency**; the daemon worker (`drain_once`, Task 16) calls `icloud.prepare_source` to materialize + stability-gate each file *before* ingest. The M1 CLI path skips iCloud entirely (local scratch vault). So tasks have no run-order coupling.
+- **`claude` CLI flags:** verified against Claude Code v2.1.158 (`-p`, `--allowed-tools`, `--dangerously-skip-permissions`). Task 7 Step 5 re-checks; adjust if a future version differs. This is the one external contract the unit tests can't pin.
+- **iCloud realism:** Tasks 10/15 are unit-tested with injected stats on the dev machine; Tasks 13/17 are the *real* validation on the Intel Sequoia host. Do not skip them.
+- **Out of scope here (Plan 2+):** query / save-query / lint / HTTP API / hermes wiring / iOS connectivity. This plan stops at "clips become wiki pages automatically."
+```

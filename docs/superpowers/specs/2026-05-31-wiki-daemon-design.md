@@ -144,6 +144,13 @@ defines the *invocation + verification*.
 **Defaults:** save-query is **opt-in** (hermes asks "save this?" via Telegram).
 lint runs **on demand + an optional weekly cron**, not after every ingest.
 
+**Headless permissions.** The daemon invokes `claude -p` with
+`--dangerously-skip-permissions` — a headless process cannot answer interactive
+permission prompts. Risk is bounded by running with `cwd = vault` and scoped
+`--allowed-tools`, but note: the `raw/` → `wiki/` firewall (don't edit `raw/`) is
+then enforced **by instruction in `CLAUDE.md`, not by a sandbox**. Acceptable for
+a personal single-user tool; revisit if the vault ever holds untrusted content.
+
 ## 5. Daemon internals
 
 Long-running Python process. **One write-worker** pulling a **persisted serial
