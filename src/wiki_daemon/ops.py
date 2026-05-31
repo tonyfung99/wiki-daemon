@@ -48,7 +48,9 @@ def ingest(
     (see `icloud.prepare_source`, wired in the daemon worker); this stays pure
     so it is fast to test and reusable by the M1 CLI path on a local vault.
     """
-    source_path = Path(source_path)
+    # resolve() so a symlinked path (e.g. macOS /tmp -> /private/tmp) is
+    # comparable to cfg.vault, which is already resolved.
+    source_path = Path(source_path).resolve()
     src = read_source(source_path)
     if store.is_processed(src.sha256):
         return IngestResult(ok=True, skipped=True)

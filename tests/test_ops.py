@@ -64,6 +64,26 @@ def test_ingest_verification_fails_when_no_summary(tmp_path):
     assert store.is_processed(read_source(src).sha256) is False
 
 
+def test_ingest_resolves_symlinked_source_path(tmp_path):
+    # mimics macOS /tmp -> /private/tmp: vault resolves but the passed path doesn't
+    from wiki_daemon.scaffold import init_vault
+    real = tmp_path / "real"
+    cfg = Config(vault=real / "v", state_root=tmp_path / "s")
+    init_vault(cfg)
+    link = tmp_path / "link"
+    link.symlink_to(real)
+    src = link / "v" / "raw" / "sources" / "x.md"
+    src.write_text("---\ntype: source\ntitle: X\n---\nbody\n", encoding="utf-8")
+    store = StateStore(cfg.processed_json)
+
+    def runner(cmd, cwd, timeout):
+        (cfg.wiki / "sources" / "x.md").write_text("summary", encoding="utf-8")
+        return 0, "ok\n", ""
+
+    result = ingest(cfg, src, store=store, runner=runner)
+    assert result.ok is True
+
+
 def test_ingest_skips_already_processed(tmp_path):
     cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
     from wiki_daemon.scaffold import init_vault
