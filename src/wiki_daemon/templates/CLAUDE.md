@@ -34,8 +34,10 @@ Given one source file path:
 2. Identify key entities and concepts.
 3. For each, create a new page OR update the existing page (by title), adding
    the source to its `sources:` list and weaving `[[cross-refs]]`.
-4. Ensure `wiki/sources/<source-slug>.md` exists summarizing this source and
-   linking the entities/concepts it touches.
+4. Ensure a summary page exists under `wiki/sources/` for this source (filename
+   = kebab-case of its title), summarizing it and linking the entities/concepts
+   it touches. Its `sources:` frontmatter MUST list this raw source's path
+   (e.g. `raw/sources/<file>.md`) — this is how the source is traced.
 5. Update `wiki/index.md` so every page is listed with a one-line summary.
 6. Append one line to `wiki/log.md`:
    `## [<YYYY-MM-DD>] ingest | <source title or url>`

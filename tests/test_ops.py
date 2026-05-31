@@ -14,11 +14,13 @@ def _make_source(cfg, name="2026-05-31-acme.md"):
 
 
 def _good_claude(cfg, source_name):
-    """A fake runner that behaves like a compliant maintainer."""
+    """A fake runner that behaves like a compliant maintainer: it names the
+    summary page by title and records the raw source in `sources:` frontmatter."""
     def runner(cmd, cwd, timeout):
-        slug = source_name.replace(".md", "")
-        (cfg.wiki / "sources" / f"{slug}.md").write_text(
-            "---\ntype: source\ntitle: Acme\n---\nsummary\n", encoding="utf-8")
+        (cfg.wiki / "sources" / "acme-corp.md").write_text(
+            "---\ntype: source\ntitle: Acme\n"
+            f"sources: [raw/sources/{source_name}]\n---\nsummary\n",
+            encoding="utf-8")
         (cfg.wiki / "index.md").write_text("# Index\n- Acme\n", encoding="utf-8")
         (cfg.wiki / "log.md").write_text("# Log\n## [2026-05-31] ingest | Acme\n",
                                          encoding="utf-8")
@@ -42,7 +44,7 @@ def test_ingest_success_marks_processed(tmp_path):
 
     assert isinstance(result, IngestResult)
     assert result.ok is True
-    assert (cfg.wiki / "sources" / "2026-05-31-acme.md").exists()
+    assert (cfg.wiki / "sources" / "acme-corp.md").exists()  # title-based name
     # sha recorded so a re-run is skipped
     from wiki_daemon.sources import read_source
     assert store.is_processed(read_source(src).sha256)
@@ -77,7 +79,9 @@ def test_ingest_resolves_symlinked_source_path(tmp_path):
     store = StateStore(cfg.processed_json)
 
     def runner(cmd, cwd, timeout):
-        (cfg.wiki / "sources" / "x.md").write_text("summary", encoding="utf-8")
+        (cfg.wiki / "sources" / "x.md").write_text(
+            "---\ntype: source\nsources: [raw/sources/x.md]\n---\nsummary\n",
+            encoding="utf-8")
         return 0, "ok\n", ""
 
     result = ingest(cfg, src, store=store, runner=runner)

@@ -6,6 +6,7 @@ from pathlib import Path
 
 from wiki_daemon.claude import Runner, run_claude
 from wiki_daemon.config import Config
+from wiki_daemon.frontmatter import parse
 from wiki_daemon.prompts import ingest_prompt
 from wiki_daemon.sources import read_source
 from wiki_daemon.state import StateStore
@@ -20,14 +21,26 @@ class IngestResult:
     reason: str = ""
 
 
-def _source_slug(source_path: Path) -> str:
-    return source_path.name[:-3] if source_path.name.endswith(".md") else source_path.name
+def _source_referenced(cfg: Config, source_rel: str) -> bool:
+    """A summary page exists under wiki/sources/ whose `sources:` frontmatter
+    lists this raw source. Verifying by the traceability contract (not a
+    filename guess) lets the maintainer name pages by title."""
+    sources_dir = cfg.wiki / "sources"
+    if not sources_dir.is_dir():
+        return False
+    for page in sources_dir.glob("*.md"):
+        meta, _ = parse(page.read_text(encoding="utf-8"))
+        refs = meta.get("sources") or []
+        if isinstance(refs, str):
+            refs = [refs]
+        if source_rel in [str(r) for r in refs]:
+            return True
+    return False
 
 
-def _verify(cfg: Config, source_path: Path) -> tuple[bool, str]:
-    summary = cfg.wiki / "sources" / f"{_source_slug(source_path)}.md"
-    if not summary.exists():
-        return False, "no source summary page was created"
+def _verify(cfg: Config, source_rel: str) -> tuple[bool, str]:
+    if not _source_referenced(cfg, source_rel):
+        return False, "no source summary page references this source"
     if not (cfg.wiki / "index.md").exists():
         return False, "index.md missing"
     if not (cfg.wiki / "log.md").exists():
@@ -67,7 +80,7 @@ def ingest(
     if not result.ok:
         return IngestResult(ok=False, reason=f"claude failed: {result.stderr[:200]}")
 
-    ok, reason = _verify(cfg, source_path)
+    ok, reason = _verify(cfg, rel)
     if not ok:
         return IngestResult(ok=False, reason=reason)
 
