@@ -281,7 +281,7 @@ subprocess/file/HTTP handling. All iCloud tricks above work from Python
 wiki-daemon/
 ├── pyproject.toml
 ├── README.md
-├── docs/superpowers/specs/2026-05-31-wiki-daemon-design.md   ← this file
+├── docs/design.md                                          ← this file
 ├── src/wiki_daemon/
 │   ├── __main__.py        # entrypoint: `wiki-daemon serve`
 │   ├── config.py          # vault path, vault-id, ~/.wiki-daemon paths

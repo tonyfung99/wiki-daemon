@@ -1,8 +1,22 @@
 [project]
 name = "wiki-daemon"
 version = "0.1.0"
-description = "LLM-maintained knowledge base daemon"
+description = "An LLM-maintained Markdown knowledge base daemon (Karpathy-style LLM wiki)"
+readme = "README.md"
 requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Tony Fung", email = "tonyfung99@gmail.com" }]
+keywords = ["llm", "knowledge-base", "wiki", "markdown", "icloud", "claude", "obsidian"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: MacOS :: MacOS X",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Utilities",
+]
 dependencies = [
     "watchdog>=4.0",
     "PyYAML>=6.0",
@@ -11,12 +25,16 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
 
+[project.urls]
+Homepage = "https://github.com/tonyfung99/wiki-daemon"
+Repository = "https://github.com/tonyfung99/wiki-daemon"
+
 [project.scripts]
 wiki = "wiki_daemon.cli:main"
 wiki-daemon = "wiki_daemon.__main__:main"
 
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
