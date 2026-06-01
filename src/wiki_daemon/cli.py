@@ -23,6 +23,10 @@ def build_parser() -> argparse.ArgumentParser:
     ing = sub.add_parser("ingest", parents=[common], help="ingest one source file")
     ing.add_argument("file", help="path to a raw source .md")
     sub.add_parser("status", parents=[common], help="show processed count")
+    doc = sub.add_parser("doctor", parents=[common],
+                         help="validate iCloud + tooling on the daemon host")
+    doc.add_argument("--probe", default=None,
+                     help="path to an already-evicted file to test materialization")
     return p
 
 
@@ -67,6 +71,9 @@ def main(argv=None) -> int:
         return cmd_ingest(cfg, ns.file)
     if ns.command == "status":
         return cmd_status(cfg)
+    if ns.command == "doctor":
+        from wiki_daemon.doctor import run_doctor
+        return run_doctor(cfg, probe=Path(ns.probe) if ns.probe else None)
     return 2
 
 
