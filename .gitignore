@@ -13,3 +13,6 @@ build/
 # Daemon runtime state (also lives at ~/.wiki-daemon, never in-repo)
 *.log
 .DS_Store
+
+# Local, machine-specific Claude Code settings (e.g. bypassPermissions for this project)
+.claude/settings.local.json
