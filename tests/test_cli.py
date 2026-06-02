@@ -99,3 +99,48 @@ def test_cmd_import_reimport_same_content_is_skipped(tmp_path, capsys, monkeypat
     assert rc == 0
     # content-hash dedupe in ops.ingest skips it even though a new file landed
     assert "skipped (already processed)" in capsys.readouterr().out.lower()
+
+
+# append to tests/test_cli.py
+import os
+
+from wiki_daemon.cli import _render_status
+from wiki_daemon.runtime import StatusFile
+
+
+def test_render_status_running_and_auth_ok(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    StatusFile(cfg.state_dir / "status.json").update(
+        pid=os.getpid(), started_at="2026-06-02T15:00:00Z", auth_state="ok")
+    out = _render_status(cfg)
+    assert "running" in out and f"pid {os.getpid()}" in out
+    assert "auth:" in out and "ok" in out
+
+
+def test_render_status_auth_failing(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    StatusFile(cfg.state_dir / "status.json").update(
+        pid=os.getpid(), auth_state="failing", auth_since="2026-06-02T15:10:00Z",
+        last_error={"msg": "claude failed: 401", "kind": "auth",
+                    "file": "raw/sources/x.md", "at": "2026-06-02T15:10:00Z"})
+    out = _render_status(cfg)
+    assert "FAILING" in out and "setup-token" in out
+    assert "last error" in out and "x.md" in out
+
+
+def test_render_status_not_running_stale_pid(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    StatusFile(cfg.state_dir / "status.json").update(pid=999_999)
+    cfg.queue_dir.mkdir(parents=True, exist_ok=True)
+    (cfg.queue_dir / "pending-00000001-ingest.json").write_text(
+        '{"type":"ingest","payload":"raw/sources/p.md"}', encoding="utf-8")
+    out = _render_status(cfg)
+    assert "not running" in out
+    assert "1 pending" in out
+
+
+def test_render_status_no_status_file(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    out = _render_status(cfg)  # no status.json at all
+    assert "not running" in out
+    assert "processed:" in out

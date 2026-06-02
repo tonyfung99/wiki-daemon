@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
 from wiki_daemon.config import Config
 from wiki_daemon.importer import import_source
 from wiki_daemon.ops import ingest
+from wiki_daemon.runtime import StatusFile, is_pid_alive
 from wiki_daemon.scaffold import init_vault
 from wiki_daemon.state import StateStore
 
@@ -80,9 +82,58 @@ def cmd_import(cfg: Config, file: str) -> int:
     return 1
 
 
-def cmd_status(cfg: Config) -> int:
+def _render_status(cfg: Config) -> str:
+    status = StatusFile(cfg.state_dir / "status.json").read()
+
+    pid = status.get("pid")
+    if pid and is_pid_alive(pid):
+        since = status.get("started_at", "?")
+        daemon = f"running (pid {pid}, since {since})"
+    elif pid:
+        daemon = "not running (stale pid)"
+    else:
+        daemon = "not running"
+
+    if status.get("auth_state") == "failing":
+        err = status.get("last_error") or {}
+        kind = err.get("kind", "auth")
+        since = status.get("auth_since", "?")
+        auth = f"FAILING since {since} ({kind}) — run `claude setup-token`"
+    elif status.get("auth_state") == "ok":
+        auth = "ok"
+    else:
+        auth = "unknown"
+
+    qdir = cfg.queue_dir
+    pending = len(list(qdir.glob("pending-*.json"))) if qdir.exists() else 0
+    inflight = sorted(qdir.glob("inflight-*.json")) if qdir.exists() else []
+    if inflight:
+        try:
+            payload = json.loads(inflight[0].read_text(encoding="utf-8"))["payload"]
+        except (json.JSONDecodeError, KeyError, OSError):
+            payload = "?"
+        ingesting = f", 1 ingesting ({payload})"
+    else:
+        ingesting = ""
+
     store = StateStore(cfg.processed_json)
-    print(f"processed: {len(store._data)}")  # noqa: SLF001
+    processed = len(store._data)  # noqa: SLF001
+
+    lines = [
+        f"daemon:     {daemon}",
+        f"auth:       {auth}",
+        f"queue:      {pending} pending{ingesting}",
+        f"processed:  {processed} sources",
+    ]
+    if status.get("last_error"):
+        e = status["last_error"]
+        lines.append(f"last error: [{e.get('at','?')}] {e.get('msg','?')} "
+                     f"({e.get('file','?')})")
+    return "\n".join(lines)
+
+
+def cmd_status(cfg: Config) -> int:
+    print(_render_status(cfg))
     return 0
 
 
