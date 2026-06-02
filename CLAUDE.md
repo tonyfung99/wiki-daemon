@@ -23,6 +23,7 @@ project-generic to an outside reader.
 ## Working in this repo
 
 - Python 3.12; the venv is at `.venv`. Run tests with `.venv/bin/pytest -q`.
-- Two console scripts: `wiki` (manual commands) and `wiki-daemon` (the watcher).
+- One console script `wiki`: manual commands (`init`/`ingest`/`import`/`status`/
+  `doctor`) plus the daemon via `wiki serve`. (`python -m wiki_daemon` also works.)
 - The daemon is the single writer of `wiki/`; the `raw/` → `wiki/` boundary is a
   firewall (watcher only watches `raw/`; `claude` only writes `wiki/`).

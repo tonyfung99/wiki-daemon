@@ -44,8 +44,8 @@ python3 -m venv .venv
 .venv/bin/pip install -e ".[dev]"
 ```
 
-This installs two console scripts: **`wiki`** (manual commands) and
-**`wiki-daemon`** (the watcher).
+This installs the **`wiki`** console script — manual commands (`init`, `ingest`,
+`import`, `status`, `doctor`) plus the daemon (`wiki serve`).
 
 ## Quickstart
 
@@ -67,7 +67,7 @@ wiki ingest --vault "$VAULT" "$VAULT/raw/sources/2026-06-01-example.md"
 wiki import --vault "$VAULT" ~/Downloads/some-note.md
 
 # 5. Or run the daemon to ingest automatically as clips arrive.
-wiki-daemon serve --vault "$VAULT"
+wiki serve --vault "$VAULT"
 
 # Anytime: how many sources have been ingested?
 wiki status --vault "$VAULT"
@@ -94,7 +94,7 @@ The clipped text goes here.
 | `wiki import --vault <path> <file>` | Copy any UTF-8 text file into `raw/sources/` (adds frontmatter if missing) and ingest it. The original is left in place. |
 | `wiki status --vault <path>` | Show daemon health: running?, auth state, queue depth, processed count, last error. |
 | `wiki doctor --vault <path> [--probe <file>]` | Validate environment, tooling, and iCloud handling on the host. |
-| `wiki-daemon serve --vault <path> [--reconcile-interval N]` | Watch `raw/sources/` and ingest autonomously. |
+| `wiki serve --vault <path> [--reconcile-interval N]` | Run the daemon: watch `raw/sources/` and ingest autonomously. |
 
 The vault's `CLAUDE.md` is the **maintainer brain** — it defines the page
 templates, naming, and the ingest algorithm `claude -p` follows. Tune it to
