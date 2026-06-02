@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.12, `argparse`, `pyyaml` (via existing `frontmatter` module), `pytest`.
 
-**Reference spec:** `docs/superpowers/specs/2026-06-02-wiki-import-design.md`
+**Reference spec:** `docs/specs/2026-06-02-wiki-import-design.md`
 
 ---
 
