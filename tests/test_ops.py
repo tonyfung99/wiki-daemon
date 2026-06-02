@@ -105,3 +105,50 @@ def test_ingest_skips_already_processed(tmp_path):
     result = ingest(cfg, src, store=store, runner=counting_runner)
     assert result.skipped is True
     assert called["n"] == 0
+
+
+# append to tests/test_ops.py
+def test_ingest_success_kind_is_ok(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    from wiki_daemon.scaffold import init_vault
+    init_vault(cfg)
+    src = _make_source(cfg)
+    store = StateStore(cfg.processed_json)
+    result = ingest(cfg, src, store=store, runner=_good_claude(cfg, src.name))
+    assert result.kind == "ok"
+
+
+def test_ingest_verify_failure_kind(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    from wiki_daemon.scaffold import init_vault
+    init_vault(cfg)
+    src = _make_source(cfg)
+    store = StateStore(cfg.processed_json)
+    result = ingest(cfg, src, store=store, runner=_lazy_claude)
+    assert result.kind == "verify_error"
+
+
+def test_ingest_auth_failure_kind(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    from wiki_daemon.scaffold import init_vault
+    init_vault(cfg)
+    src = _make_source(cfg)
+    store = StateStore(cfg.processed_json)
+
+    def auth_fail(cmd, cwd, timeout):
+        return 1, "", "API Error: 401 Invalid authentication credentials"
+
+    result = ingest(cfg, src, store=store, runner=auth_fail)
+    assert result.ok is False and result.kind == "auth"
+
+
+def test_ingest_skip_kind(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    from wiki_daemon.scaffold import init_vault
+    init_vault(cfg)
+    src = _make_source(cfg)
+    store = StateStore(cfg.processed_json)
+    from wiki_daemon.sources import read_source
+    store.mark_processed(read_source(src).sha256, str(src))
+    result = ingest(cfg, src, store=store, runner=_lazy_claude)
+    assert result.skipped is True and result.kind == "skipped"

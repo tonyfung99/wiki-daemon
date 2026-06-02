@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from wiki_daemon.claude import Runner, run_claude
+from wiki_daemon.claude import Runner, run_claude, classify_failure
 from wiki_daemon.config import Config
 from wiki_daemon.frontmatter import parse
 from wiki_daemon.prompts import ingest_prompt
@@ -19,6 +19,7 @@ class IngestResult:
     ok: bool
     skipped: bool = False
     reason: str = ""
+    kind: str = ""
 
 
 def _source_referenced(cfg: Config, source_rel: str) -> bool:
@@ -66,7 +67,7 @@ def ingest(
     source_path = Path(source_path).resolve()
     src = read_source(source_path)
     if store.is_processed(src.sha256):
-        return IngestResult(ok=True, skipped=True)
+        return IngestResult(ok=True, skipped=True, kind="skipped")
 
     rel = source_path.relative_to(cfg.vault).as_posix()
     kwargs = {} if runner is None else {"runner": runner}
@@ -78,11 +79,12 @@ def ingest(
         **kwargs,
     )
     if not result.ok:
-        return IngestResult(ok=False, reason=f"claude failed: {result.stderr[:200]}")
+        return IngestResult(ok=False, kind=classify_failure(result),
+                            reason=f"claude failed: {result.stderr[:200]}")
 
     ok, reason = _verify(cfg, rel)
     if not ok:
-        return IngestResult(ok=False, reason=reason)
+        return IngestResult(ok=False, reason=reason, kind="verify_error")
 
     store.mark_processed(src.sha256, str(source_path))
-    return IngestResult(ok=True)
+    return IngestResult(ok=True, kind="ok")
