@@ -16,8 +16,7 @@ def main(argv=None) -> int:
     s.add_argument("--reconcile-interval", type=float, default=300.0)
     ns = p.parse_args(argv)
     cfg = Config(vault=Path(ns.vault))
-    serve(cfg, reconcile_interval=ns.reconcile_interval)
-    return 0
+    return serve(cfg, reconcile_interval=ns.reconcile_interval)
 
 
 if __name__ == "__main__":
