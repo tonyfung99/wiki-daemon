@@ -63,6 +63,9 @@ wiki doctor --vault "$VAULT"
 # 4. Ingest a single clip by hand (drop a .md into raw/sources/ first).
 wiki ingest --vault "$VAULT" "$VAULT/raw/sources/2026-06-01-example.md"
 
+# 4b. Or import a file from anywhere — copies it into raw/sources/ then ingests.
+wiki import --vault "$VAULT" ~/Downloads/some-note.md
+
 # 5. Or run the daemon to ingest automatically as clips arrive.
 wiki-daemon serve --vault "$VAULT"
 
@@ -88,6 +91,7 @@ The clipped text goes here.
 |---|---|
 | `wiki init --vault <path>` | Scaffold a vault (`CLAUDE.md`, `purpose.md`, `raw/`, `wiki/`). Idempotent. |
 | `wiki ingest --vault <path> <file>` | Ingest one source file now (runs `claude -p`, verifies, records it). |
+| `wiki import --vault <path> <file>` | Copy any UTF-8 text file into `raw/sources/` (adds frontmatter if missing) and ingest it. The original is left in place. |
 | `wiki status --vault <path>` | Show how many sources have been processed. |
 | `wiki doctor --vault <path> [--probe <file>]` | Validate environment, tooling, and iCloud handling on the host. |
 | `wiki-daemon serve --vault <path> [--reconcile-interval N]` | Watch `raw/sources/` and ingest autonomously. |
