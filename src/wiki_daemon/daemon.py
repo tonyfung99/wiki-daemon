@@ -176,11 +176,13 @@ def serve(cfg: Config, *, reconcile_interval: float = 300.0, tick: float = 2.0) 
                 backoff_until = time.monotonic() + delay
                 _log.error("auth/%s failure — pausing ingest for %ss",
                            res.transient_kind, delay)
-                status.update(auth_state="failing", auth_since=now_iso(),
-                              backoff_until=iso_in(delay))
+                fields = {"auth_state": auth_state, "backoff_until": iso_in(delay)}
+                if consecutive == 1:  # record onset only on the first failing tick
+                    fields["auth_since"] = now_iso()
+                status.update(**fields)
             else:
                 backoff_until = 0.0
-                status.update(auth_state="ok", auth_since=None, backoff_until=None)
+                status.update(auth_state=auth_state, auth_since=None, backoff_until=None)
             if time.monotonic() - last_reconcile >= reconcile_interval:
                 enqueue_reconcile(cfg, q, StateStore(cfg.processed_json))
                 last_reconcile = time.monotonic()
