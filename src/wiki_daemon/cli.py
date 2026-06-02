@@ -61,8 +61,6 @@ def cmd_ingest(cfg: Config, file: str) -> int:
 
 
 def cmd_import(cfg: Config, file: str) -> int:
-    import wiki_daemon.ops as ops
-
     try:
         dest = import_source(cfg, Path(file))
     except (FileNotFoundError, ValueError) as exc:
@@ -71,7 +69,7 @@ def cmd_import(cfg: Config, file: str) -> int:
     print(f"imported {dest.name}")
 
     store = StateStore(cfg.processed_json)
-    result = ops.ingest(cfg, dest, store=store)
+    result = ingest(cfg, dest, store=store)
     if result.skipped:
         print("skipped (already processed)")
         return 0

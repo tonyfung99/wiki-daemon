@@ -19,10 +19,13 @@ def _slugify(stem: str) -> str:
 
 
 def _dest_name(stem: str, today: str) -> str:
-    """`YYYY-MM-DD-<slug>.md`, skipping the date prefix when the stem already
-    starts with one (avoids `2026-06-02-2026-06-01-foo`)."""
-    if _DATE_PREFIX.match(stem):
-        return f"{stem}.md"
+    """`YYYY-MM-DD-<slug>.md`. Keeps the stem's own date prefix when it already
+    has one (avoids `2026-06-02-2026-06-01-foo`), but always slugifies the rest
+    so spaces/case/punctuation never reach the filename."""
+    m = _DATE_PREFIX.match(stem)
+    if m:
+        date, rest = m.group(0)[:-1], stem[m.end():]
+        return f"{date}-{_slugify(rest)}.md"
     return f"{today}-{_slugify(stem)}.md"
 
 
@@ -49,8 +52,8 @@ def import_source(cfg: Config, src_path: Path) -> Path:
         raise ValueError(f"not a UTF-8 text file: {src_path}") from exc
 
     stem = src_path.stem
-    today = _now_iso()[:10]  # YYYY-MM-DD
-    name = _dest_name(stem, today)
+    now = _now_iso()
+    name = _dest_name(stem, now[:10])  # now[:10] is the YYYY-MM-DD date
 
     cfg.raw_sources.mkdir(parents=True, exist_ok=True)
     dest = cfg.raw_sources / name
@@ -63,7 +66,7 @@ def import_source(cfg: Config, src_path: Path) -> Path:
         out = text
     else:
         title = _slugify(stem).replace("-", " ").title()
-        out = dump({"type": "source", "captured_at": _now_iso(), "title": title}, text)
+        out = dump({"type": "source", "captured_at": now, "title": title}, text)
 
     dest.write_text(out, encoding="utf-8")
     return dest

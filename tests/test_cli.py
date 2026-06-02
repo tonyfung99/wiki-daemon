@@ -45,18 +45,22 @@ def _good_claude(cfg):
     return runner
 
 
+def _patch_ingest(monkeypatch, cfg):
+    """Route cmd_import's `ingest` call through the fake claude runner. cmd_import
+    uses the module-level `ingest` symbol, so we patch it on `wiki_daemon.cli`."""
+    import wiki_daemon.cli as cli
+    real_ingest = cli.ingest
+    monkeypatch.setattr(cli, "ingest",
+                        lambda cfg, path, *, store: real_ingest(
+                            cfg, path, store=store, runner=_good_claude(cfg)))
+
+
 def test_cmd_import_lands_and_ingests(tmp_path, capsys, monkeypatch):
     cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
     init_vault(cfg)
     external = tmp_path / "outside.md"
     external.write_text("some clipped text\n", encoding="utf-8")
-
-    # Route ops.run_claude through the fake runner without changing signatures.
-    import wiki_daemon.ops as ops
-    real_ingest = ops.ingest
-    monkeypatch.setattr(ops, "ingest",
-                        lambda cfg, path, *, store: real_ingest(
-                            cfg, path, store=store, runner=_good_claude(cfg)))
+    _patch_ingest(monkeypatch, cfg)
 
     rc = cmd_import(cfg, str(external))
 
@@ -65,3 +69,33 @@ def test_cmd_import_lands_and_ingests(tmp_path, capsys, monkeypatch):
     assert list(cfg.raw_sources.glob("*-outside.md"))  # landed copy
     out = capsys.readouterr().out.lower()
     assert "imported" in out and "ingested" in out
+
+
+def test_cmd_import_missing_file_fails(tmp_path, capsys):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    init_vault(cfg)
+
+    rc = cmd_import(cfg, str(tmp_path / "nope.md"))
+
+    assert rc == 1
+    assert "import failed" in capsys.readouterr().err.lower()
+
+
+def test_cmd_import_reimport_same_content_is_skipped(tmp_path, capsys, monkeypatch):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    init_vault(cfg)
+    # A file WITH frontmatter is copied verbatim, so re-imports are byte-identical
+    # and content-hash dedupe is deterministic (a synthesized captured_at would
+    # otherwise vary between imports).
+    external = tmp_path / "outside.md"
+    external.write_text("---\ntype: source\ntitle: Outside\n---\nclipped text\n",
+                        encoding="utf-8")
+    _patch_ingest(monkeypatch, cfg)
+
+    assert cmd_import(cfg, str(external)) == 0  # first import ingests
+    capsys.readouterr()  # drain
+    rc = cmd_import(cfg, str(external))  # same content again
+
+    assert rc == 0
+    # content-hash dedupe in ops.ingest skips it even though a new file landed
+    assert "skipped (already processed)" in capsys.readouterr().out.lower()

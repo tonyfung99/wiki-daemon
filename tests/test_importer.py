@@ -26,6 +26,11 @@ def test_dest_name_skips_double_date_prefix():
     assert _dest_name("2026-05-31-acme", "2026-06-02") == "2026-05-31-acme.md"
 
 
+def test_dest_name_slugifies_tail_after_date_prefix():
+    # keep the stem's own date, but still slugify the rest (no spaces/case)
+    assert _dest_name("2026-05-31-Acme Corp!", "2026-06-02") == "2026-05-31-acme-corp.md"
+
+
 # ---------------------------------------------------------------------------
 # Task 2: import_source
 # ---------------------------------------------------------------------------
