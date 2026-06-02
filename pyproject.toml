@@ -31,7 +31,6 @@ Repository = "https://github.com/tonyfung99/wiki-daemon"
 
 [project.scripts]
 wiki = "wiki_daemon.cli:main"
-wiki-daemon = "wiki_daemon.__main__:main"
 
 [build-system]
 requires = ["setuptools>=77"]

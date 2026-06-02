@@ -1,23 +1,7 @@
-"""`wiki-daemon serve --vault <path>` entrypoint."""
+"""`python -m wiki_daemon ...` delegates to the unified `wiki` CLI."""
 from __future__ import annotations
 
-import argparse
-from pathlib import Path
-
-from wiki_daemon.config import Config
-from wiki_daemon.daemon import serve
-
-
-def main(argv=None) -> int:
-    p = argparse.ArgumentParser(prog="wiki-daemon")
-    sub = p.add_subparsers(dest="command", required=True)
-    s = sub.add_parser("serve", help="watch the vault and ingest autonomously")
-    s.add_argument("--vault", required=True)
-    s.add_argument("--reconcile-interval", type=float, default=300.0)
-    ns = p.parse_args(argv)
-    cfg = Config(vault=Path(ns.vault))
-    return serve(cfg, reconcile_interval=ns.reconcile_interval)
-
+from wiki_daemon.cli import main
 
 if __name__ == "__main__":
     raise SystemExit(main())

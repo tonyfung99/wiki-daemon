@@ -144,3 +144,26 @@ def test_render_status_no_status_file(tmp_path):
     out = _render_status(cfg)  # no status.json at all
     assert "not running" in out
     assert "processed:" in out
+
+
+def test_parser_has_serve_subcommand():
+    parser = build_parser()
+    ns = parser.parse_args(["serve", "--vault", "/tmp/v", "--reconcile-interval", "10"])
+    assert ns.command == "serve"
+    assert ns.vault == "/tmp/v"
+    assert ns.reconcile_interval == 10.0
+
+
+def test_main_serve_dispatches_to_daemon(monkeypatch, tmp_path):
+    import wiki_daemon.daemon as daemon
+    from wiki_daemon.cli import main
+
+    called = {}
+
+    def fake_serve(cfg, *, reconcile_interval):
+        called["ri"] = reconcile_interval
+        return 0
+
+    monkeypatch.setattr(daemon, "serve", fake_serve)
+    rc = main(["serve", "--vault", str(tmp_path), "--reconcile-interval", "5"])
+    assert rc == 0 and called["ri"] == 5.0
