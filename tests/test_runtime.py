@@ -41,3 +41,10 @@ def test_pid_alive_false_for_dead():
 def test_now_iso_format():
     s = now_iso()
     assert s.endswith("Z") and "T" in s and len(s) == 20
+
+
+def test_iso_in_is_future_and_formatted():
+    from wiki_daemon.runtime import iso_in, now_iso
+    later = iso_in(60)
+    assert later.endswith("Z") and "T" in later and len(later) == 20
+    assert later > now_iso()  # 60s ahead sorts after now (ISO lexical == chronological)

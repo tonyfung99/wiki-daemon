@@ -14,12 +14,12 @@ from watchdog.observers import Observer
 
 from wiki_daemon.backoff import next_backoff
 from wiki_daemon.config import Config
-from wiki_daemon.health import AuthResult, probe_auth
+from wiki_daemon.health import probe_auth
 from wiki_daemon.icloud import prepare_source
 from wiki_daemon.logging_setup import configure_logging
 from wiki_daemon.ops import ingest as _ingest
 from wiki_daemon.queue import Job, JobQueue
-from wiki_daemon.runtime import StatusFile, now_iso
+from wiki_daemon.runtime import StatusFile, iso_in, now_iso
 from wiki_daemon.state import StateStore
 from wiki_daemon.watcher import files_to_ingest, is_relevant
 
@@ -30,6 +30,17 @@ _log = logging.getLogger("wiki_daemon")
 class DrainResult:
     ingested: int = 0
     transient_kind: str | None = None  # "auth"/"unavailable" if seen this drain
+
+
+def _backoff_decision(consecutive: int, res: "DrainResult") -> tuple[int, int | None, str]:
+    """Pure transition for the serve loop. Given the current consecutive-failure
+    count and a drain result, return (new_consecutive, delay_seconds_or_None,
+    auth_state). A transient (auth/unavailable) failure raises the count and
+    yields a backoff delay; anything else is treated as healthy and resets."""
+    if res.transient_kind:
+        n = consecutive + 1
+        return n, next_backoff(n), "failing"
+    return 0, None, "ok"
 
 
 def enqueue_reconcile(cfg: Config, q: JobQueue, store: StateStore) -> int:
@@ -160,18 +171,16 @@ def serve(cfg: Config, *, reconcile_interval: float = 300.0, tick: float = 2.0) 
                 time.sleep(tick)
                 continue
             res = drain_once(cfg, q, status=status)
-            if res.transient_kind:
-                consecutive += 1
-                delay = next_backoff(consecutive)
+            consecutive, delay, auth_state = _backoff_decision(consecutive, res)
+            if delay is not None:
                 backoff_until = time.monotonic() + delay
                 _log.error("auth/%s failure — pausing ingest for %ss",
                            res.transient_kind, delay)
                 status.update(auth_state="failing", auth_since=now_iso(),
-                              backoff_until=now_iso())
-            elif res.ingested > 0:
-                consecutive = 0
+                              backoff_until=iso_in(delay))
+            else:
                 backoff_until = 0.0
-                status.update(auth_state="ok", backoff_until=None)
+                status.update(auth_state="ok", auth_since=None, backoff_until=None)
             if time.monotonic() - last_reconcile >= reconcile_interval:
                 enqueue_reconcile(cfg, q, StateStore(cfg.processed_json))
                 last_reconcile = time.monotonic()

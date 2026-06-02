@@ -1,8 +1,21 @@
 from wiki_daemon.config import Config
 from wiki_daemon.queue import JobQueue, Job
-from wiki_daemon.daemon import drain_once, enqueue_reconcile
+from wiki_daemon.daemon import _backoff_decision, drain_once, enqueue_reconcile, DrainResult
 from wiki_daemon.state import StateStore
 from wiki_daemon.runtime import StatusFile
+
+
+def test_backoff_decision_transient_raises_and_delays():
+    n, delay, auth = _backoff_decision(0, DrainResult(ingested=0, transient_kind="auth"))
+    assert n == 1 and delay == 30 and auth == "failing"
+    n2, delay2, _ = _backoff_decision(n, DrainResult(transient_kind="auth"))
+    assert n2 == 2 and delay2 == 60
+
+
+def test_backoff_decision_clean_drain_resets():
+    # a clean/idle drain (no transient failure) resets to healthy even with 0 ingested
+    assert _backoff_decision(3, DrainResult(ingested=0, transient_kind=None)) == (0, None, "ok")
+    assert _backoff_decision(3, DrainResult(ingested=2, transient_kind=None)) == (0, None, "ok")
 
 
 def test_enqueue_reconcile_adds_unprocessed(tmp_path):
