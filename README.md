@@ -92,7 +92,7 @@ The clipped text goes here.
 | `wiki init --vault <path>` | Scaffold a vault (`CLAUDE.md`, `purpose.md`, `raw/`, `wiki/`). Idempotent. |
 | `wiki ingest --vault <path> <file>` | Ingest one source file now (runs `claude -p`, verifies, records it). |
 | `wiki import --vault <path> <file>` | Copy any UTF-8 text file into `raw/sources/` (adds frontmatter if missing) and ingest it. The original is left in place. |
-| `wiki status --vault <path>` | Show how many sources have been processed. |
+| `wiki status --vault <path>` | Show daemon health: running?, auth state, queue depth, processed count, last error. |
 | `wiki doctor --vault <path> [--probe <file>]` | Validate environment, tooling, and iCloud handling on the host. |
 | `wiki-daemon serve --vault <path> [--reconcile-interval N]` | Watch `raw/sources/` and ingest autonomously. |
 
@@ -110,6 +110,10 @@ change how your wiki is built.
   recovery + a periodic reconcile sweep (FSEvents in iCloud folders is lossy).
 - **iCloud** = detects not-downloaded "dataless" files and materializes them
   (`brctl download` / `fileproviderctl materialize`) before reading.
+- **Observability** = the daemon logs to stdout and a rotating `daemon.log` in
+  its state dir; `wiki status` surfaces health; `wiki doctor` verifies `claude`
+  is authenticated (headless `claude -p` needs its own valid login — use
+  `claude setup-token` for an unattended daemon).
 
 ## Docs
 

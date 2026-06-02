@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from wiki_daemon.config import Config
+from wiki_daemon.health import probe_auth
 from wiki_daemon.icloud import ensure_materialized, is_dataless
 
 _ICLOUD_MARKER = "Mobile Documents/com~apple~CloudDocs"
@@ -64,6 +65,16 @@ def check_tooling() -> list[Check]:
             "found" if have_claude else "NOT on PATH — daemon can't ingest",
         ),
     ]
+
+
+def check_auth(cfg: Config, *, probe_fn=probe_auth) -> Check:
+    res = probe_fn(cfg)
+    if res.state == "ok":
+        return Check("tool:claude-auth", "PASS", "authenticated")
+    if res.state == "auth_failed":
+        return Check("tool:claude-auth", "FAIL",
+                     f"{res.detail} — run `claude setup-token`")
+    return Check("tool:claude-auth", "WARN", f"could not verify: {res.detail}")
 
 
 def check_vault(cfg: Config) -> list[Check]:
@@ -127,6 +138,8 @@ def probe_existing(path: Path) -> Check:
 def run_doctor(cfg: Config, *, probe: Path | None = None, run=_run) -> int:
     checks: list[Check] = [check_environment()]
     checks += check_tooling()
+    if cfg.vault.exists():
+        checks.append(check_auth(cfg))
     checks += check_vault(cfg)
     if cfg.vault.exists():
         checks.append(check_pinned(cfg, run))

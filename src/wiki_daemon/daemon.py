@@ -1,18 +1,46 @@
 """Serve loop: FSEvents + periodic reconcile feed a serial write-worker."""
 from __future__ import annotations
 
+import logging
+import os
+import subprocess
+import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
+from wiki_daemon.backoff import next_backoff
 from wiki_daemon.config import Config
+from wiki_daemon.health import probe_auth
 from wiki_daemon.icloud import prepare_source
+from wiki_daemon.logging_setup import configure_logging
 from wiki_daemon.ops import ingest as _ingest
 from wiki_daemon.queue import Job, JobQueue
+from wiki_daemon.runtime import StatusFile, iso_in, now_iso
 from wiki_daemon.state import StateStore
 from wiki_daemon.watcher import files_to_ingest, is_relevant
+
+_log = logging.getLogger("wiki_daemon")
+
+
+@dataclass
+class DrainResult:
+    ingested: int = 0
+    transient_kind: str | None = None  # "auth"/"unavailable" if seen this drain
+
+
+def _backoff_decision(consecutive: int, res: "DrainResult") -> tuple[int, int | None, str]:
+    """Pure transition for the serve loop. Given the current consecutive-failure
+    count and a drain result, return (new_consecutive, delay_seconds_or_None,
+    auth_state). A transient (auth/unavailable) failure raises the count and
+    yields a backoff delay; anything else is treated as healthy and resets."""
+    if res.transient_kind:
+        n = consecutive + 1
+        return n, next_backoff(n), "failing"
+    return 0, None, "ok"
 
 
 def enqueue_reconcile(cfg: Config, q: JobQueue, store: StateStore) -> int:
@@ -23,22 +51,41 @@ def enqueue_reconcile(cfg: Config, q: JobQueue, store: StateStore) -> int:
     return n
 
 
-def drain_once(cfg: Config, q: JobQueue, *, ingest_fn=None, prepare_fn=prepare_source) -> int:
+def drain_once(cfg: Config, q: JobQueue, *, ingest_fn=None,
+               prepare_fn=prepare_source, status=None) -> DrainResult:
     """Run pending jobs serially. Materialize + stability-gate each file before
-    ingest; if not ready, drop the job (the reconcile sweep re-enqueues later).
-    Returns the number of files actually ingested."""
+    ingest; if not ready, drop the job (reconcile re-enqueues later). Logs each
+    job, records the latest success/error in `status`, and reports whether a
+    transient (auth/unavailable) failure occurred so the caller can back off."""
     store = StateStore(cfg.processed_json)
     run = ingest_fn or (lambda config, path: _ingest(config, Path(path), store=store))
-    count = 0
+    result = DrainResult()
     while True:
         job = q.dequeue()
         if job is None:
             break
         if prepare_fn(Path(job.payload)):
-            run(cfg, job.payload)
-            count += 1
+            if status is not None:
+                status.update(last_attempt=now_iso())
+            r = run(cfg, job.payload)
+            kind = getattr(r, "kind", "") or ("ok" if r.ok else "claude_error")
+            if r.ok and not r.skipped:
+                result.ingested += 1
+                _log.info("ingested %s", job.payload)
+                if status is not None:
+                    status.update(last_success=now_iso(), last_error=None,
+                                  auth_state="ok")
+            elif r.skipped:
+                _log.info("skipped (already processed) %s", job.payload)
+            else:
+                _log.warning("ingest FAILED (%s) %s — %s", kind, job.payload, r.reason)
+                if status is not None:
+                    status.update(last_error={"msg": r.reason, "kind": kind,
+                                              "file": job.payload, "at": now_iso()})
+                if kind in ("auth", "unavailable"):
+                    result.transient_kind = kind
         q.complete(job)
-    return count
+    return result
 
 
 class _Handler(FileSystemEventHandler):
@@ -60,9 +107,54 @@ class _Handler(FileSystemEventHandler):
             self._maybe(event.dest_path)
 
 
-def serve(cfg: Config, *, reconcile_interval: float = 300.0, tick: float = 2.0) -> None:
+def _run_setup_token(cfg: Config) -> int:
+    """Launch the interactive `claude setup-token` flow (inherits stdio)."""
+    return subprocess.run([cfg.claude_bin, "setup-token"]).returncode
+
+
+def _preflight_auth(
+    cfg: Config,
+    *,
+    probe_fn=probe_auth,
+    isatty_fn=None,
+    setup_token_fn=_run_setup_token,
+    input_fn=input,
+) -> bool:
+    """Verify headless claude auth before watching. Returns True to proceed.
+    Non-interactive failure -> False (caller exits non-zero). Interactive
+    failure -> launch `claude setup-token`, re-probe, repeat until ok or abort."""
+    isatty_fn = isatty_fn or sys.stdin.isatty
+    res = probe_fn(cfg)
+    if res.state == "ok":
+        _log.info("auth: ok")
+        return True
+    if not isatty_fn():
+        _log.error("auth FAILED (%s): %s. Run `claude setup-token`, then restart. "
+                   "Exiting.", res.state, res.detail)
+        return False
+    while res.state != "ok":
+        _log.warning("auth FAILED (%s): %s. Launching `claude setup-token`...",
+                     res.state, res.detail)
+        setup_token_fn(cfg)
+        res = probe_fn(cfg)
+        if res.state == "ok":
+            _log.info("auth: ok after setup-token")
+            return True
+        if input_fn("auth still failing — retry setup-token? [y/N] ").strip().lower() != "y":
+            _log.error("auth not resolved; aborting startup.")
+            return False
+    return True
+
+
+def serve(cfg: Config, *, reconcile_interval: float = 300.0, tick: float = 2.0) -> int:
+    configure_logging(cfg)
+    if not _preflight_auth(cfg):
+        return 2
     cfg.state_dir.mkdir(parents=True, exist_ok=True)
     cfg.raw_sources.mkdir(parents=True, exist_ok=True)  # defensive: observer needs it
+    status = StatusFile(cfg.state_dir / "status.json")
+    status.update(pid=os.getpid(), started_at=now_iso(), auth_state="ok",
+                  backoff_until=None, last_error=None)
     q = JobQueue(cfg.queue_dir)
     store = StateStore(cfg.processed_json)
 
@@ -71,9 +163,26 @@ def serve(cfg: Config, *, reconcile_interval: float = 300.0, tick: float = 2.0) 
     observer.schedule(_Handler(cfg, q), str(cfg.raw_sources), recursive=False)
     observer.start()
     last_reconcile = time.monotonic()
+    consecutive = 0
+    backoff_until = 0.0
     try:
         while True:
-            drain_once(cfg, q)
+            if time.monotonic() < backoff_until:
+                time.sleep(tick)
+                continue
+            res = drain_once(cfg, q, status=status)
+            consecutive, delay, auth_state = _backoff_decision(consecutive, res)
+            if delay is not None:
+                backoff_until = time.monotonic() + delay
+                _log.error("auth/%s failure — pausing ingest for %ss",
+                           res.transient_kind, delay)
+                fields = {"auth_state": auth_state, "backoff_until": iso_in(delay)}
+                if consecutive == 1:  # record onset only on the first failing tick
+                    fields["auth_since"] = now_iso()
+                status.update(**fields)
+            else:
+                backoff_until = 0.0
+                status.update(auth_state=auth_state, auth_since=None, backoff_until=None)
             if time.monotonic() - last_reconcile >= reconcile_interval:
                 enqueue_reconcile(cfg, q, StateStore(cfg.processed_json))
                 last_reconcile = time.monotonic()
@@ -81,3 +190,5 @@ def serve(cfg: Config, *, reconcile_interval: float = 300.0, tick: float = 2.0) 
     finally:
         observer.stop()
         observer.join()
+        status.update(pid=None)
+    return 0
