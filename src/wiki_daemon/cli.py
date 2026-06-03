@@ -6,6 +6,7 @@ import json
 import sys
 from pathlib import Path
 
+from wiki_daemon import __version__
 from wiki_daemon import lint as lintmod
 from wiki_daemon.config import Config
 from wiki_daemon.importer import import_source
@@ -28,7 +29,8 @@ def _add_interactive_flags(parser: argparse.ArgumentParser) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="wiki")
-    sub = p.add_subparsers(dest="command", required=True)
+    p.add_argument("--version", action="version", version=f"wiki {__version__}")
+    sub = p.add_subparsers(dest="command")
 
     # --vault is shared by every subcommand (e.g. `wiki init --vault <path>`).
     common = argparse.ArgumentParser(add_help=False)
@@ -302,7 +304,11 @@ def cmd_query(cfg: Config, question: str, *, save: bool = False) -> int:
 
 
 def main(argv=None) -> int:
-    ns = build_parser().parse_args(argv)
+    parser = build_parser()
+    ns = parser.parse_args(argv)
+    if ns.command is None:
+        parser.print_help()
+        return 0
     cfg = _config(ns)
     if ns.command == "init":
         return cmd_init(cfg)

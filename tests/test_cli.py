@@ -471,3 +471,21 @@ def test_cmd_lint_fix_repair_failure_returns_1(tmp_path, monkeypatch, capsys):
 
     rc = cmd_lint(cfg, deep=False, fix=True, yes=True)
     assert rc == 1 and "repair failed" in capsys.readouterr().err.lower()
+
+
+import pytest
+from wiki_daemon.cli import main
+
+
+def test_version_flag(capsys):
+    with pytest.raises(SystemExit) as e:
+        main(["--version"])
+    assert e.value.code == 0
+    assert "0.1.0" in capsys.readouterr().out
+
+
+def test_bare_wiki_prints_help(capsys):
+    rc = main([])
+    assert rc == 0
+    out = capsys.readouterr().out.lower()
+    assert "usage" in out and "ingest" in out
