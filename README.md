@@ -96,6 +96,7 @@ The clipped text goes here.
 | `wiki ingest --vault <path> [--interactive\|--no-interactive] <file>` | Ingest one source now. Interactive (the default in a terminal) asks clarifications live; headless queues them to `wiki/review/`. |
 | `wiki import --vault <path> [--interactive\|--no-interactive] <file>` | Copy any UTF-8 text file into `raw/sources/` (adds frontmatter if missing) and ingest it (same interactive/headless behavior as `ingest`). The original is left in place. |
 | `wiki query --vault <path> [--save] "<question>"` | Ask the wiki a question — reads `index.md`, opens relevant pages, prints a cited answer. `--save` files it as a `wiki/queries/` page. |
+| `wiki lint --vault <path> [--deep] [--fix] [--yes]` | Health-check the wiki: dead links, iCloud conflict-dupes, orphans, index/log integrity. `--deep` adds an LLM semantic scan; `--fix` repairs (confirmed). |
 | `wiki status --vault <path>` | Show daemon health: running?, auth state, queue depth, processed count, open clarifications, last error. |
 | `wiki review --vault <path>` | List open ingest clarifications. `wiki review answer <id> "…"` records your answer and applies it. |
 | `wiki doctor --vault <path> [--probe <file>]` | Validate environment, tooling, and iCloud handling on the host. |
@@ -127,6 +128,11 @@ change how your wiki is built.
   vault: it reads `index.md`, opens the relevant pages, and prints a cited answer
   (Markdown tables, Mermaid, code snippets — no code execution). `--save` files
   the answer as a `wiki/queries/` page so explorations compound like sources.
+- **Lint** = `wiki lint` runs pure-Python checks (dead `[[links]]`, iCloud
+  conflict-duplicates like `page 2.md`, orphan pages, index/log integrity) and
+  prints a report — exit 1 if anything is found, so it's cron-friendly. `--deep`
+  adds an LLM scan for contradictions/stale claims; `--fix` deletes conflict-dupes
+  and runs an LLM repair pass (always confirmed) to resolve the rest.
 
 ## Docs
 
