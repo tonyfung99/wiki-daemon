@@ -489,3 +489,36 @@ def test_bare_wiki_prints_help(capsys):
     assert rc == 0
     out = capsys.readouterr().out.lower()
     assert "usage" in out and "ingest" in out
+
+
+def test_command_resolves_vault_from_cwd(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))  # keep daemon state off real home
+    cfg0 = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    init_vault(cfg0)
+    monkeypatch.setattr("pathlib.Path.cwd", lambda: cfg0.vault / "wiki")
+    monkeypatch.delenv("WIKI_VAULT", raising=False)
+    monkeypatch.setattr("wiki_daemon.cli._config_path",
+                        lambda: tmp_path / "noconfig.toml")
+    rc = main(["status"])
+    assert rc == 0
+    assert "processed:" in capsys.readouterr().out
+
+
+def test_command_no_vault_anywhere_exits_2(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr("pathlib.Path.cwd", lambda: tmp_path / "empty")
+    monkeypatch.delenv("WIKI_VAULT", raising=False)
+    monkeypatch.setattr("wiki_daemon.cli._config_path",
+                        lambda: tmp_path / "noconfig.toml")
+    with pytest.raises(SystemExit) as e:
+        main(["status"])
+    assert e.value.code == 2
+    assert "no vault found" in capsys.readouterr().err.lower()
+
+
+def test_explicit_vault_still_works(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    cfg0 = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    init_vault(cfg0)
+    rc = main(["status", "--vault", str(cfg0.vault)])
+    assert rc == 0

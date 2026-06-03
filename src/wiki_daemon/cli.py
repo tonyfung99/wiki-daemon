@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -78,11 +79,24 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _config_path() -> Path:
+    base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+    return Path(base) / "wiki" / "config.toml"
+
+
 def _config(ns) -> Config:
-    if not ns.vault:
-        print("error: --vault is required", file=sys.stderr)
+    # `init` CREATES a vault — target an explicit path or the current directory.
+    if ns.command == "init":
+        return Config(vault=Path(ns.vault) if ns.vault else Path.cwd())
+    # every other command DISCOVERS an existing vault via the resolution chain.
+    from wiki_daemon.vault import VaultNotFound, resolve_vault
+    try:
+        vault = resolve_vault(ns.vault, env=os.environ.get("WIKI_VAULT"),
+                              start_dir=Path.cwd(), config_path=_config_path())
+    except VaultNotFound as exc:
+        print(f"error: {exc}", file=sys.stderr)
         raise SystemExit(2)
-    return Config(vault=Path(ns.vault))
+    return Config(vault=vault)
 
 
 def cmd_init(cfg: Config) -> int:
