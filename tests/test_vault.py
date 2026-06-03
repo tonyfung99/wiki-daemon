@@ -80,3 +80,39 @@ def test_resolve_raises_when_nothing(tmp_path):
     with pytest.raises(VaultNotFound):
         resolve_vault(None, env=None, start_dir=tmp_path / "empty",
                       config_path=tmp_path / "nope.toml")
+
+
+def test_config_roundtrip_path_with_space(tmp_path):
+    cfg = tmp_path / "c.toml"
+    vault = tmp_path / "Mobile Documents" / "My Wiki"
+    write_config_vault(cfg, vault)
+    assert read_config_vault(cfg) == vault.resolve()
+
+
+def test_config_roundtrip_path_with_quote(tmp_path):
+    cfg = tmp_path / "c.toml"
+    vault = tmp_path / 'weird"name'
+    write_config_vault(cfg, vault)
+    assert read_config_vault(cfg) == vault.resolve()
+
+
+def test_read_config_non_string_default_returns_none(tmp_path):
+    bad = tmp_path / "n.toml"
+    bad.write_text("default_vault = 42\n", encoding="utf-8")
+    assert read_config_vault(bad) is None
+    bad2 = tmp_path / "n2.toml"
+    bad2.write_text("default_vault = true\n", encoding="utf-8")
+    assert read_config_vault(bad2) is None
+
+
+def test_read_config_empty_string_default_returns_none(tmp_path):
+    p = tmp_path / "e.toml"
+    p.write_text('default_vault = ""\n', encoding="utf-8")
+    assert read_config_vault(p) is None
+
+
+def test_resolve_whitespace_env_falls_through_to_discovery(tmp_path):
+    v = _make_vault(tmp_path / "v")
+    got = resolve_vault(None, env="   ", start_dir=v / "wiki",
+                        config_path=tmp_path / "c.toml")
+    assert got == v.resolve()

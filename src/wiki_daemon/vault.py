@@ -36,21 +36,22 @@ def read_config_vault(config_path: Path) -> Path | None:
     except (FileNotFoundError, OSError, tomllib.TOMLDecodeError):
         return None
     v = data.get("default_vault")
-    return Path(v) if v else None
+    return Path(v) if isinstance(v, str) and v.strip() else None
 
 
 def write_config_vault(config_path: Path, vault: Path) -> None:
     """Record the absolute vault path as the config default (the only v1 key)."""
     p = Path(config_path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(f'default_vault = "{Path(vault).resolve()}"\n', encoding="utf-8")
+    escaped = str(Path(vault).resolve()).replace("\\", "\\\\").replace('"', '\\"')
+    p.write_text(f'default_vault = "{escaped}"\n', encoding="utf-8")
 
 
 def resolve_vault(explicit, *, env=None, start_dir=None, config_path=None,
                   finder=find_vault_upward) -> Path:
-    if explicit:
+    if explicit and str(explicit).strip():
         return Path(explicit)
-    if env:
+    if env and env.strip():
         return Path(env)
     if start_dir is not None:
         found = finder(Path(start_dir))
