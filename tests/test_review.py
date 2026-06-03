@@ -66,3 +66,16 @@ def test_write_answer_sets_status_and_answer(tmp_path):
     assert again.status == "answered"
     assert again.answer == "They are the same; keep one page."
     assert "context body" in (cfg.review / "calvin-vs-dark.md").read_text(encoding="utf-8")
+
+
+def test_write_answer_missing_raises(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        write_answer(_cfg(tmp_path), "nope", "x")
+
+
+def test_empty_answer_string_distinct_from_none(tmp_path):
+    cfg = _cfg(tmp_path)
+    _seed(cfg, answer="")           # answer key present but empty
+    assert read_item(cfg, "calvin-vs-dark").answer == ""
+    _seed(cfg, item_id="open-one")  # no answer key
+    assert read_item(cfg, "open-one").answer is None

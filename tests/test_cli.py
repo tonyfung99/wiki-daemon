@@ -275,3 +275,14 @@ def test_render_status_shows_review_count(tmp_path):
         "---\ntype: review\nstatus: open\n---\nx\n", encoding="utf-8")
     out = _render_status(cfg)
     assert "review:" in out and "2 open" in out
+
+
+def test_want_interactive_autodetects_tty(monkeypatch):
+    import wiki_daemon.cli as cli
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    assert cli._want_interactive(None) is True
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    assert cli._want_interactive(None) is False
+    # explicit flag always wins over the TTY check
+    assert cli._want_interactive(True) is True
+    assert cli._want_interactive(False) is False

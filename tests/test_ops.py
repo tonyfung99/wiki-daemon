@@ -238,3 +238,22 @@ def test_apply_clarification_file_not_removed_fails(tmp_path):
     _seed_answered_review(cfg, "q3")
     result = apply_clarification(cfg, "q3", runner=lambda cmd, cwd, timeout: (0, "ok", ""))
     assert result.ok is False and "not removed" in result.reason
+
+
+def test_ingest_interactive_skips_already_processed(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    from wiki_daemon.scaffold import init_vault
+    init_vault(cfg)
+    src = _make_source(cfg)
+    store = StateStore(cfg.processed_json)
+    from wiki_daemon.sources import read_source
+    store.mark_processed(read_source(src).sha256, str(src))
+
+    called = {"n": 0}
+    def counting_runner(cmd, cwd):
+        called["n"] += 1
+        return 0
+
+    result = ingest_interactive(cfg, src, store=store, runner=counting_runner)
+    assert result.skipped is True and result.kind == "skipped"
+    assert called["n"] == 0  # never launched claude

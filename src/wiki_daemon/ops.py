@@ -4,7 +4,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from wiki_daemon.claude import Runner, run_claude, run_claude_interactive, classify_failure
+from wiki_daemon.claude import (
+    InteractiveRunner, Runner, classify_failure, run_claude, run_claude_interactive,
+)
 from wiki_daemon.config import Config
 from wiki_daemon.frontmatter import parse
 from wiki_daemon.prompts import ingest_prompt, apply_clarification_prompt
@@ -101,7 +103,7 @@ def ingest_interactive(
     source_path: Path,
     *,
     store: StateStore,
-    runner=None,
+    runner: InteractiveRunner | None = None,
 ) -> IngestResult:
     """Interactive ingest: launch `claude` (no -p) so the maintainer can ask the
     user live. Verifies + marks processed only if the session produced a valid
@@ -121,6 +123,8 @@ def ingest_interactive(
         **kwargs,
     )
     if code != 0:
+        # Interactive inherits stdio (no captured stderr), so we can't classify
+        # auth/timeout the way headless ingest does — report a generic error.
         return IngestResult(ok=False, kind="claude_error",
                             reason=f"interactive claude exited {code}")
     ok, reason = _verify(cfg, rel)
@@ -130,7 +134,8 @@ def ingest_interactive(
     return IngestResult(ok=True, kind="ok")
 
 
-def apply_clarification(cfg: Config, review_id: str, *, runner=None) -> ApplyResult:
+def apply_clarification(cfg: Config, review_id: str, *,
+                        runner: Runner | None = None) -> ApplyResult:
     """Run a maintainer pass that applies an answered review item, then verify
     the review file was removed (the contract for 'resolved')."""
     from wiki_daemon.review import read_item

@@ -63,7 +63,7 @@ def run_claude(
     return ClaudeResult(ok=(code == 0), returncode=code, stdout=out, stderr=err)
 
 
-# Interactive runner(cmd, cwd) -> returncode. No capture: stdio is inherited so
+# Interactive runner (cmd, cwd) -> returncode. No capture: stdio is inherited so
 # the user can converse with claude in their terminal.
 InteractiveRunner = Callable[[list[str], Path], int]
 

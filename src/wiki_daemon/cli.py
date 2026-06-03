@@ -15,6 +15,15 @@ from wiki_daemon.scaffold import init_vault
 from wiki_daemon.state import StateStore
 
 
+def _add_interactive_flags(parser: argparse.ArgumentParser) -> None:
+    """Tri-state --interactive/--no-interactive: unset (None) auto-detects a TTY."""
+    g = parser.add_mutually_exclusive_group()
+    g.add_argument("--interactive", dest="interactive", action="store_true",
+                   default=None, help="ask clarifications live (default if a TTY)")
+    g.add_argument("--no-interactive", dest="interactive", action="store_false",
+                   help="headless: queue clarifications to wiki/review/")
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="wiki")
     sub = p.add_subparsers(dest="command", required=True)
@@ -26,19 +35,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("init", parents=[common], help="scaffold a new vault")
     ing = sub.add_parser("ingest", parents=[common], help="ingest one source file")
     ing.add_argument("file", help="path to a raw source .md")
-    ig = ing.add_mutually_exclusive_group()
-    ig.add_argument("--interactive", dest="interactive", action="store_true",
-                    default=None, help="ask clarifications live (default if a TTY)")
-    ig.add_argument("--no-interactive", dest="interactive", action="store_false",
-                    help="headless: queue clarifications to wiki/review/")
+    _add_interactive_flags(ing)
     imp = sub.add_parser("import", parents=[common],
                          help="copy a file into the vault and ingest it")
     imp.add_argument("file", help="path to any UTF-8 text file to import")
-    mg = imp.add_mutually_exclusive_group()
-    mg.add_argument("--interactive", dest="interactive", action="store_true",
-                    default=None, help="ask clarifications live (default if a TTY)")
-    mg.add_argument("--no-interactive", dest="interactive", action="store_false",
-                    help="headless: queue clarifications to wiki/review/")
+    _add_interactive_flags(imp)
     sub.add_parser("status", parents=[common], help="show processed count")
     doc = sub.add_parser("doctor", parents=[common],
                          help="validate iCloud + tooling on the daemon host")
@@ -71,12 +72,12 @@ def cmd_init(cfg: Config) -> int:
     return 0
 
 
-def _want_interactive(flag) -> bool:
+def _want_interactive(flag: bool | None) -> bool:
     """Resolve the tri-state flag: explicit wins, else auto-detect a TTY."""
     return sys.stdin.isatty() if flag is None else flag
 
 
-def cmd_ingest(cfg: Config, file: str, *, interactive=None) -> int:
+def cmd_ingest(cfg: Config, file: str, *, interactive: bool | None = None) -> int:
     store = StateStore(cfg.processed_json)
     if _want_interactive(interactive):
         result = ingest_interactive(cfg, Path(file), store=store)
@@ -92,7 +93,7 @@ def cmd_ingest(cfg: Config, file: str, *, interactive=None) -> int:
     return 1
 
 
-def cmd_import(cfg: Config, file: str, *, interactive=None) -> int:
+def cmd_import(cfg: Config, file: str, *, interactive: bool | None = None) -> int:
     try:
         dest = import_source(cfg, Path(file))
     except (FileNotFoundError, ValueError) as exc:
@@ -152,6 +153,9 @@ def _render_status(cfg: Config) -> str:
     store = StateStore(cfg.processed_json)
     processed = len(store._data)  # noqa: SLF001
 
+    # Counts all review files. Answered items are transient (deleted on a
+    # successful apply), so a lingering one means apply failed — still "needs
+    # attention", fairly shown as open.
     review_open = len(list(cfg.review.glob("*.md"))) if cfg.review.is_dir() else 0
 
     lines = [
