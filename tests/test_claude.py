@@ -26,8 +26,10 @@ def test_builds_command_and_runs_in_vault(tmp_path):
     assert captured["cmd"][0] == "claude"
     assert "-p" in captured["cmd"]
     assert "ingest this" in captured["cmd"]
-    # allowed-tools passed as a comma-joined value
-    assert "Read,Write,Edit" in captured["cmd"]
+    # allowed-tools passed as separate list elements
+    assert "Read" in captured["cmd"]
+    assert "Write" in captured["cmd"]
+    assert "Edit" in captured["cmd"]
     # headless daemon must not block on permission prompts
     assert "--dangerously-skip-permissions" in captured["cmd"]
 
@@ -101,7 +103,8 @@ def test_run_claude_interactive_builds_argv_without_dash_p():
     assert seen["cmd"][0] == "claude"
     assert "hello" in seen["cmd"]
     assert "--allowed-tools" in seen["cmd"]
-    assert "Read,Write" in seen["cmd"]
+    assert "Read" in seen["cmd"]
+    assert "Write" in seen["cmd"]
     assert "--dangerously-skip-permissions" in seen["cmd"]
 
 

@@ -286,3 +286,61 @@ def test_want_interactive_autodetects_tty(monkeypatch):
     # explicit flag always wins over the TTY check
     assert cli._want_interactive(True) is True
     assert cli._want_interactive(False) is False
+
+
+from wiki_daemon.cli import cmd_query
+
+
+def test_query_parser_accepts_question_and_save():
+    parser = build_parser()
+    ns = parser.parse_args(["query", "--vault", "/v", "what is X?"])
+    assert ns.command == "query" and ns.question == "what is X?" and ns.save is False
+    ns2 = parser.parse_args(["query", "--vault", "/v", "--save", "what is X?"])
+    assert ns2.save is True
+
+
+def test_cmd_query_prints_answer(tmp_path, monkeypatch, capsys):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    init_vault(cfg)
+    import wiki_daemon.cli as cli
+    from wiki_daemon.ops import QueryResult
+    monkeypatch.setattr(cli, "query",
+                        lambda cfg, q, *, save: QueryResult(ok=True, answer="ANS"))
+    rc = cli.cmd_query(cfg, "q?", save=False)
+    assert rc == 0
+    assert "ANS" in capsys.readouterr().out
+
+
+def test_cmd_query_save_reports_saved(tmp_path, monkeypatch, capsys):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    init_vault(cfg)
+    import wiki_daemon.cli as cli
+    from wiki_daemon.ops import QueryResult
+    monkeypatch.setattr(cli, "query",
+                        lambda cfg, q, *, save: QueryResult(ok=True, answer="A", saved=True))
+    rc = cli.cmd_query(cfg, "q?", save=True)
+    out = capsys.readouterr().out
+    assert rc == 0 and "A" in out and "saved" in out
+
+
+def test_cmd_query_save_failure_returns_1(tmp_path, monkeypatch, capsys):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    init_vault(cfg)
+    import wiki_daemon.cli as cli
+    from wiki_daemon.ops import QueryResult
+    monkeypatch.setattr(cli, "query", lambda cfg, q, *, save:
+                        QueryResult(ok=True, answer="A", saved=False, reason="no query page"))
+    rc = cli.cmd_query(cfg, "q?", save=True)
+    err = capsys.readouterr().err
+    assert rc == 1 and "save failed" in err
+
+
+def test_cmd_query_failure_returns_1(tmp_path, monkeypatch, capsys):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    init_vault(cfg)
+    import wiki_daemon.cli as cli
+    from wiki_daemon.ops import QueryResult
+    monkeypatch.setattr(cli, "query", lambda cfg, q, *, save:
+                        QueryResult(ok=False, reason="claude failed: 401", kind="auth"))
+    rc = cli.cmd_query(cfg, "q?", save=False)
+    assert rc == 1 and "query failed" in capsys.readouterr().err

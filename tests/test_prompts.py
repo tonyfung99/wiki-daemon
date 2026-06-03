@@ -25,3 +25,22 @@ def test_apply_clarification_prompt_names_file_and_op():
     p = apply_clarification_prompt("wiki/review/calvin.md")
     assert "wiki/review/calvin.md" in p
     assert "APPLY CLARIFICATION" in p.upper()
+
+
+from wiki_daemon.prompts import query_prompt
+
+
+def test_query_prompt_readonly_names_question_and_no_files():
+    p = query_prompt("What is photosynthesis?")
+    assert "What is photosynthesis?" in p
+    assert "QUERY" in p.upper()
+    assert "read-only" in p.lower() or "read only" in p.lower()
+    assert "do not execute code" in p.lower()
+    assert "mermaid" in p.lower()
+
+
+def test_query_prompt_save_mentions_queries_and_type():
+    p = query_prompt("What is photosynthesis?", save=True)
+    assert "wiki/queries/" in p
+    assert "type: query" in p
+    assert "wiki/log.md" in p

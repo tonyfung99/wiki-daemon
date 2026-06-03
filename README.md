@@ -71,6 +71,9 @@ wiki serve --vault "$VAULT"
 
 # Anytime: how many sources have been ingested?
 wiki status --vault "$VAULT"
+
+# Ask the wiki a question (read-only); add --save to keep the answer as a page.
+wiki query --vault "$VAULT" "What do my sources say about X?"
 ```
 
 A raw source is just Markdown with YAML frontmatter:
@@ -92,6 +95,7 @@ The clipped text goes here.
 | `wiki init --vault <path>` | Scaffold a vault (`CLAUDE.md`, `purpose.md`, `raw/`, `wiki/`). Idempotent. |
 | `wiki ingest --vault <path> [--interactive\|--no-interactive] <file>` | Ingest one source now. Interactive (the default in a terminal) asks clarifications live; headless queues them to `wiki/review/`. |
 | `wiki import --vault <path> [--interactive\|--no-interactive] <file>` | Copy any UTF-8 text file into `raw/sources/` (adds frontmatter if missing) and ingest it (same interactive/headless behavior as `ingest`). The original is left in place. |
+| `wiki query --vault <path> [--save] "<question>"` | Ask the wiki a question — reads `index.md`, opens relevant pages, prints a cited answer. `--save` files it as a `wiki/queries/` page. |
 | `wiki status --vault <path>` | Show daemon health: running?, auth state, queue depth, processed count, open clarifications, last error. |
 | `wiki review --vault <path>` | List open ingest clarifications. `wiki review answer <id> "…"` records your answer and applies it. |
 | `wiki doctor --vault <path> [--probe <file>]` | Validate environment, tooling, and iCloud handling on the host. |
@@ -119,6 +123,10 @@ change how your wiki is built.
   ingest asks you live; otherwise (scripts, the daemon) the maintainer files an
   open question under `wiki/review/`. Resolve later with `wiki review` and
   `wiki review answer <id> "…"`, which runs a maintainer pass to apply it.
+- **Query** = `wiki query "…"` runs `claude -p` read-only (Read/Glob/Grep) in the
+  vault: it reads `index.md`, opens the relevant pages, and prints a cited answer
+  (Markdown tables, Mermaid, code snippets — no code execution). `--save` files
+  the answer as a `wiki/queries/` page so explorations compound like sources.
 
 ## Docs
 

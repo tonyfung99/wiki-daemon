@@ -73,3 +73,32 @@ Given one answered review file (`status: answered`, with an `answer:` field):
 3. Append one line to `wiki/log.md`:
    `## [<YYYY-MM-DD>] review | <question>`
 4. DELETE the review file (resolution = removal).
+
+## QUERY operation
+Given a question:
+1. Read `wiki/index.md` to find the relevant pages, then open and read them.
+2. Synthesize an answer, **citing** the pages you used via `[[wiki-links]]`.
+3. Use rich Markdown where it helps — comparison tables, Mermaid diagrams
+   (```mermaid blocks that render from text), and fenced code snippets (e.g.
+   ```python) included for reference. Do NOT execute code.
+4. By default this is READ-ONLY: do not create or edit files; just give the
+   answer.
+
+## SAVE-QUERY
+When asked to save a query answer, additionally:
+1. Write the answer as `wiki/queries/<kebab-slug>.md` with frontmatter:
+   ```
+   ---
+   type: query
+   title: <Human Title>
+   query: "<the exact question asked>"
+   updated: <YYYY-MM-DD>
+   ---
+   ```
+   followed by the answer body (with `[[wiki-link]]` citations).
+2. You MAY write companion artifact files alongside it (e.g. a Marp deck
+   `wiki/queries/<kebab-slug>-deck.md`) and link them from the page — Markdown/
+   text only, no code execution.
+3. Update `wiki/index.md` to list the new page.
+4. Append one line to `wiki/log.md`:
+   `## [<YYYY-MM-DD>] query | <question>`
