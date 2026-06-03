@@ -4,10 +4,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from wiki_daemon.claude import Runner, run_claude, classify_failure
+from wiki_daemon.claude import Runner, run_claude, run_claude_interactive, classify_failure
 from wiki_daemon.config import Config
 from wiki_daemon.frontmatter import parse
-from wiki_daemon.prompts import ingest_prompt
+from wiki_daemon.prompts import ingest_prompt, apply_clarification_prompt
 from wiki_daemon.sources import read_source
 from wiki_daemon.state import StateStore
 
@@ -20,6 +20,12 @@ class IngestResult:
     skipped: bool = False
     reason: str = ""
     kind: str = ""
+
+
+@dataclass
+class ApplyResult:
+    ok: bool
+    reason: str = ""
 
 
 def _source_referenced(cfg: Config, source_rel: str) -> bool:
@@ -88,3 +94,65 @@ def ingest(
 
     store.mark_processed(src.sha256, str(source_path))
     return IngestResult(ok=True, kind="ok")
+
+
+def ingest_interactive(
+    cfg: Config,
+    source_path: Path,
+    *,
+    store: StateStore,
+    runner=None,
+) -> IngestResult:
+    """Interactive ingest: launch `claude` (no -p) so the maintainer can ask the
+    user live. Verifies + marks processed only if the session produced a valid
+    result (the user may abort)."""
+    source_path = Path(source_path).resolve()
+    src = read_source(source_path)
+    if store.is_processed(src.sha256):
+        return IngestResult(ok=True, skipped=True, kind="skipped")
+
+    rel = source_path.relative_to(cfg.vault).as_posix()
+    kwargs = {} if runner is None else {"runner": runner}
+    code = run_claude_interactive(
+        prompt=ingest_prompt(rel, interactive=True),
+        cwd=cfg.vault,
+        allowed_tools=_ALLOWED_TOOLS,
+        claude_bin=cfg.claude_bin,
+        **kwargs,
+    )
+    if code != 0:
+        return IngestResult(ok=False, kind="claude_error",
+                            reason=f"interactive claude exited {code}")
+    ok, reason = _verify(cfg, rel)
+    if not ok:
+        return IngestResult(ok=False, reason=reason, kind="verify_error")
+    store.mark_processed(src.sha256, str(source_path))
+    return IngestResult(ok=True, kind="ok")
+
+
+def apply_clarification(cfg: Config, review_id: str, *, runner=None) -> ApplyResult:
+    """Run a maintainer pass that applies an answered review item, then verify
+    the review file was removed (the contract for 'resolved')."""
+    from wiki_daemon.review import read_item
+
+    try:
+        item = read_item(cfg, review_id)
+    except FileNotFoundError as exc:
+        return ApplyResult(ok=False, reason=str(exc))
+    if item.status != "answered":
+        return ApplyResult(ok=False, reason="item is not answered yet")
+
+    review_rel = item.path.relative_to(cfg.vault).as_posix()
+    kwargs = {} if runner is None else {"runner": runner}
+    result = run_claude(
+        prompt=apply_clarification_prompt(review_rel),
+        cwd=cfg.vault,
+        allowed_tools=_ALLOWED_TOOLS,
+        claude_bin=cfg.claude_bin,
+        **kwargs,
+    )
+    if not result.ok:
+        return ApplyResult(ok=False, reason=f"claude failed: {result.stderr[:200]}")
+    if item.path.exists():
+        return ApplyResult(ok=False, reason="review file not removed; not applied")
+    return ApplyResult(ok=True)
