@@ -43,3 +43,31 @@ def test_finding_is_frozen_dataclass():
     f = Finding(check="dead_link", severity="error", path="wiki/x.md",
                 message="m", fixable=False, fix_action="")
     assert f.check == "dead_link" and f.fixable is False
+
+
+# append to tests/test_lint.py
+from wiki_daemon.lint import _dead_links, _conflict_duplicates
+
+
+def test_dead_link_flagged_resolving_link_clean(tmp_path):
+    cfg = _cfg(tmp_path)
+    _page(cfg, "concepts", "cycle.md", title="Calvin Cycle")
+    _page(cfg, "concepts", "p.md", title="Photosynthesis",
+          body="Uses [[Calvin Cycle]] and [[Dark Reactions]].")
+    findings = _dead_links(cfg)
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.check == "dead_link" and "Dark Reactions" in f.message
+    assert f.path.endswith("p.md") and f.fixable is False
+
+
+def test_conflict_duplicate_flagged_only_when_base_exists(tmp_path):
+    cfg = _cfg(tmp_path)
+    _page(cfg, "concepts", "photosynthesis.md", title="Photosynthesis")
+    _page(cfg, "concepts", "photosynthesis 2.md", title="Photosynthesis")  # dupe
+    _page(cfg, "concepts", "chapter 2.md", title="Chapter 2")  # NOT a dupe (no base)
+    findings = _conflict_duplicates(cfg)
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.path.endswith("photosynthesis 2.md")
+    assert f.fixable is True and f.fix_action == "delete_file"

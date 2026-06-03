@@ -51,3 +51,39 @@ def _titles(cfg: Config) -> set[str]:
 def _links_in(body: str) -> list[str]:
     """Targets of [[Link]] / [[Link|alias]] in order, alias stripped."""
     return [_norm(m.split("|", 1)[0]) for m in _WIKILINK.findall(body)]
+
+
+def _rel(cfg: Config, p: Path) -> str:
+    return p.relative_to(cfg.vault).as_posix()
+
+
+def _dead_links(cfg: Config) -> list[Finding]:
+    titles = _titles(cfg)
+    out: list[Finding] = []
+    for p in _iter_pages(cfg):
+        _, body = parse(p.read_text(encoding="utf-8"))
+        for target in _links_in(body):
+            if target not in titles:
+                out.append(Finding(
+                    "dead_link", "error", _rel(cfg, p),
+                    f"link [[{target}]] resolves to no page"))
+    return out
+
+
+_DUP = re.compile(r"^(?P<base>.+) \d+\.md$")
+
+
+def _conflict_duplicates(cfg: Config) -> list[Finding]:
+    out: list[Finding] = []
+    for sub in _CATALOG:
+        d = cfg.wiki / sub
+        if not d.is_dir():
+            continue
+        for p in sorted(d.glob("*.md")):
+            m = _DUP.match(p.name)
+            if m and (d / f"{m.group('base')}.md").exists():
+                out.append(Finding(
+                    "conflict_duplicate", "warning", _rel(cfg, p),
+                    f"iCloud conflict copy of {m.group('base')}.md",
+                    fixable=True, fix_action="delete_file"))
+    return out
