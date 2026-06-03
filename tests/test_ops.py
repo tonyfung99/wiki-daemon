@@ -349,3 +349,57 @@ def test_verify_query_matches_whitespace_insensitively(tmp_path):
     assert ok is True
     ok2, reason = _verify_query(cfg, "A different question?")
     assert ok2 is False and "query page" in reason
+
+
+from wiki_daemon.ops import lint_deep, lint_repair, LintScan, ApplyResult
+
+
+def test_lint_deep_readonly_returns_report(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    from wiki_daemon.scaffold import init_vault
+    init_vault(cfg)
+    seen = {}
+
+    def runner(cmd, cwd, timeout):
+        seen["cmd"] = cmd
+        return 0, "Found 1 contradiction between A and B.", ""
+
+    scan = lint_deep(cfg, runner=runner)
+    assert isinstance(scan, LintScan)
+    assert scan.ok is True and "contradiction" in scan.report
+    assert "Write" not in seen["cmd"]  # read-only
+
+
+def test_lint_deep_claude_failure(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    from wiki_daemon.scaffold import init_vault
+    init_vault(cfg)
+
+    def runner(cmd, cwd, timeout):
+        return 1, "", "API Error: 401 Invalid authentication credentials"
+
+    scan = lint_deep(cfg, runner=runner)
+    assert scan.ok is False and scan.kind == "auth"
+
+
+def test_lint_repair_runs_with_write_tools(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    from wiki_daemon.scaffold import init_vault
+    init_vault(cfg)
+    seen = {}
+
+    def runner(cmd, cwd, timeout):
+        seen["cmd"] = cmd
+        return 0, "fixed", ""
+
+    result = lint_repair(cfg, "- dead link [[X]]", runner=runner)
+    assert isinstance(result, ApplyResult) and result.ok is True
+    assert "Write" in seen["cmd"]
+
+
+def test_lint_repair_claude_failure(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    from wiki_daemon.scaffold import init_vault
+    init_vault(cfg)
+    result = lint_repair(cfg, "x", runner=lambda cmd, cwd, timeout: (1, "", "boom"))
+    assert result.ok is False and "boom" in result.reason
