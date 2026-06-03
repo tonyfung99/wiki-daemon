@@ -20,6 +20,12 @@ skills honor a project's stated spec/plan paths). When a skill would write to
 and plans where a neutral phrasing works — the documents should read as
 project-generic to an outside reader.
 
+## Workflow defaults
+
+- When executing an implementation plan, **always use subagent-driven development**
+  (`superpowers:subagent-driven-development`) by default — don't ask which
+  execution mode to use. Fresh subagent per task + spec/code-quality review.
+
 ## Working in this repo
 
 - Python 3.12; the venv is at `.venv`. Run tests with `.venv/bin/pytest -q`.
