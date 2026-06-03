@@ -21,3 +21,14 @@ def test_init_is_idempotent_and_preserves_content(tmp_path):
     (cfg.vault / "purpose.md").write_text("my custom purpose\n", encoding="utf-8")
     init_vault(cfg)  # second run must not clobber
     assert (cfg.vault / "purpose.md").read_text(encoding="utf-8") == "my custom purpose\n"
+
+
+def test_template_has_clarification_sections(tmp_path):
+    from wiki_daemon.config import Config
+    from wiki_daemon.scaffold import init_vault
+    cfg = Config(vault=tmp_path)
+    init_vault(cfg)
+    text = (cfg.vault / "CLAUDE.md").read_text(encoding="utf-8")
+    assert "wiki/review/" in text
+    assert "RAISE CLARIFICATION" in text
+    assert "APPLY CLARIFICATION" in text
