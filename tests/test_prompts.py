@@ -44,3 +44,21 @@ def test_query_prompt_save_mentions_queries_and_type():
     assert "wiki/queries/" in p
     assert "type: query" in p
     assert "wiki/log.md" in p
+
+
+from wiki_daemon.prompts import lint_prompt, lint_repair_prompt
+
+
+def test_lint_prompt_readonly_semantic():
+    p = lint_prompt()
+    assert "LINT" in p.upper()
+    assert "read-only" in p.lower() or "do not modify" in p.lower()
+    assert "contradiction" in p.lower()
+
+
+def test_lint_repair_prompt_includes_findings_and_log():
+    p = lint_repair_prompt("- dead link [[X]] in a.md", deep_report="contradiction Y")
+    assert "[[X]]" in p
+    assert "contradiction Y" in p
+    assert "wiki/log.md" in p
+    assert "LINT REPAIR" in p.upper()

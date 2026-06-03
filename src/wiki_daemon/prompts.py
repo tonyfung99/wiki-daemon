@@ -57,3 +57,25 @@ def query_prompt(question: str, *, save: bool = False) -> str:
         "wiki/queries/<kebab-slug>-deck.md) and link them — Markdown/text only, no "
         "code execution."
     )
+
+
+def lint_prompt() -> str:
+    return (
+        "Follow the LINT operation defined in CLAUDE.md exactly.\n"
+        "This is READ-ONLY: scan the wiki for contradictions, stale claims, and "
+        "data gaps. List each issue with the page(s) involved. Do not modify any "
+        "files."
+    )
+
+
+def lint_repair_prompt(findings_text: str, deep_report: str = "") -> str:
+    deep = f"\nSemantic findings to also resolve:\n{deep_report}" if deep_report else ""
+    return (
+        "Follow the LINT REPAIR operation defined in CLAUDE.md exactly.\n"
+        f"Fix these findings:\n{findings_text}{deep}\n"
+        "For each: create the missing page OR remove the dead link (your "
+        "judgment), de-orphan pages by linking/indexing them, fill index gaps, "
+        "and reconcile contradictions — preserving sources: traceability. Update "
+        "wiki/index.md and append a line to wiki/log.md. Do not modify anything "
+        "under raw/."
+    )
