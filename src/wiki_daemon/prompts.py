@@ -32,3 +32,28 @@ def apply_clarification_prompt(review_rel_path: str) -> str:
         "to wiki/log.md, then delete the review file. Do not modify anything "
         "under raw/."
     )
+
+
+def query_prompt(question: str, *, save: bool = False) -> str:
+    base = (
+        "Follow the QUERY operation defined in CLAUDE.md exactly.\n"
+        f"Answer this question from the wiki, citing the pages you used: {question}\n"
+        "Read wiki/index.md first, open the relevant pages, and synthesize an "
+        "answer with [[wiki-link]] citations. Use rich Markdown where it helps — "
+        "comparison tables, Mermaid diagrams (```mermaid), and fenced code "
+        "snippets (e.g. ```python) — but do NOT execute code. Do not modify "
+        "anything under raw/."
+    )
+    if not save:
+        return base + (
+            "\nThis is READ-ONLY: do not create or edit any files. Print the "
+            "answer (Markdown tables and ```mermaid/code blocks are fine in text)."
+        )
+    return base + (
+        "\nThen SAVE-QUERY: write the answer as wiki/queries/<kebab-slug>.md with "
+        "frontmatter `type: query` and `query: \"<the question>\"` (plus title and "
+        "updated), update wiki/index.md, and append a line to wiki/log.md. You MAY "
+        "also write companion artifact files alongside it (e.g. a Marp deck "
+        "wiki/queries/<kebab-slug>-deck.md) and link them — Markdown/text only, no "
+        "code execution."
+    )
