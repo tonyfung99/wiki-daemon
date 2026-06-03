@@ -9,7 +9,7 @@ def test_init_creates_structure(tmp_path):
     assert (cfg.vault / "CLAUDE.md").exists()
     assert (cfg.vault / "purpose.md").exists()
     assert (cfg.raw_sources).is_dir()
-    for sub in ("entities", "concepts", "sources", "queries"):
+    for sub in ("entities", "concepts", "sources", "queries", "review"):
         assert (cfg.wiki / sub).is_dir()
     assert (cfg.wiki / "index.md").exists()
     assert (cfg.wiki / "log.md").exists()
