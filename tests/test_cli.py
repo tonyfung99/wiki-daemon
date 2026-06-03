@@ -375,3 +375,69 @@ def test_render_findings_groups_and_counts():
 def test_render_findings_includes_deep_section():
     out = _render_findings([], "Contradiction between A and B")
     assert "Semantic findings" in out and "Contradiction between A and B" in out
+
+
+from wiki_daemon.cli import cmd_lint
+
+
+def _seed_clean_vault(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    init_vault(cfg)
+    (cfg.wiki / "index.md").write_text("# Index\n", encoding="utf-8")
+    (cfg.wiki / "log.md").write_text("# Log\n", encoding="utf-8")
+    return cfg
+
+
+def test_cmd_lint_clean_returns_0(tmp_path, capsys):
+    cfg = _seed_clean_vault(tmp_path)
+    rc = cmd_lint(cfg, deep=False, fix=False, yes=False)
+    assert rc == 0 and "clean" in capsys.readouterr().out.lower()
+
+
+def test_cmd_lint_findings_return_1(tmp_path, capsys):
+    cfg = _seed_clean_vault(tmp_path)
+    (cfg.wiki / "concepts" / "p.md").write_text(
+        "---\ntype: concept\ntitle: P\n---\n[[Nope]]\n", encoding="utf-8")
+    rc = cmd_lint(cfg, deep=False, fix=False, yes=False)
+    out = capsys.readouterr().out
+    assert rc == 1 and "Nope" in out
+
+
+def test_cmd_lint_fix_yes_deletes_conflict_dup(tmp_path, monkeypatch, capsys):
+    cfg = _seed_clean_vault(tmp_path)
+    (cfg.wiki / "concepts" / "a.md").write_text(
+        "---\ntype: concept\ntitle: A\n---\nx\n", encoding="utf-8")
+    dupe = cfg.wiki / "concepts" / "a 2.md"
+    dupe.write_text("---\ntype: concept\ntitle: A\n---\nx\n", encoding="utf-8")
+    (cfg.wiki / "index.md").write_text("# Index\n- [[A]] — x\n", encoding="utf-8")
+    import wiki_daemon.cli as cli
+    from wiki_daemon.ops import ApplyResult
+    monkeypatch.setattr(cli, "lint_repair", lambda cfg, t, *, deep_report="": ApplyResult(ok=True))
+
+    rc = cmd_lint(cfg, deep=False, fix=True, yes=True)
+    assert not dupe.exists()  # deleted
+    assert "deleted" in capsys.readouterr().out.lower()
+
+
+def test_cmd_lint_fix_no_tty_without_yes_refuses(tmp_path, monkeypatch, capsys):
+    cfg = _seed_clean_vault(tmp_path)
+    (cfg.wiki / "concepts" / "a.md").write_text(
+        "---\ntype: concept\ntitle: A\n---\nx\n", encoding="utf-8")
+    dupe = cfg.wiki / "concepts" / "a 2.md"
+    dupe.write_text("---\ntype: concept\ntitle: A\n---\nx\n", encoding="utf-8")
+    (cfg.wiki / "index.md").write_text("# Index\n- [[A]] — x\n", encoding="utf-8")
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+
+    rc = cmd_lint(cfg, deep=False, fix=True, yes=False)
+    assert rc == 2 and dupe.exists()  # refused, nothing deleted
+    assert "refus" in capsys.readouterr().err.lower()
+
+
+def test_cmd_lint_deep_appends_section(tmp_path, monkeypatch, capsys):
+    cfg = _seed_clean_vault(tmp_path)
+    import wiki_daemon.cli as cli
+    from wiki_daemon.ops import LintScan
+    monkeypatch.setattr(cli, "lint_deep",
+                        lambda cfg: LintScan(ok=True, report="Contradiction X vs Y"))
+    rc = cmd_lint(cfg, deep=True, fix=False, yes=False)
+    assert "Contradiction X vs Y" in capsys.readouterr().out

@@ -237,6 +237,55 @@ def cmd_review_answer(cfg: Config, item_id: str, text: str) -> int:
     return 1
 
 
+def cmd_lint(cfg: Config, *, deep: bool = False, fix: bool = False,
+             yes: bool = False) -> int:
+    findings = lintmod.run_checks(cfg)
+    deep_report = ""
+    if deep:
+        scan = lint_deep(cfg)
+        if scan.ok:
+            deep_report = scan.report
+        else:
+            print(f"lint deep failed: {scan.reason}", file=sys.stderr)
+    print(_render_findings(findings, deep_report))
+
+    if not fix:
+        return 1 if findings else 0
+
+    deletions = [f for f in findings if f.fix_action == "delete_file"]
+    needs_repair = any(not f.fixable for f in findings) or bool(deep_report)
+    if not deletions and not needs_repair:
+        return 0  # nothing to fix
+
+    # Confirm before mutating the LLM-owned wiki.
+    if not yes:
+        if not sys.stdin.isatty():
+            print("refusing to --fix without confirmation; re-run with --yes",
+                  file=sys.stderr)
+            return 2
+        plan = (f"will delete {len(deletions)} conflict-duplicate file(s)"
+                + (" and run an LLM repair pass" if needs_repair else ""))
+        if input(f"{plan}. Proceed? [type 'yes'] ").strip() != "yes":
+            print("aborted")
+            return 0
+
+    for f in deletions:
+        (cfg.vault / f.path).unlink(missing_ok=True)
+        print(f"deleted {f.path}")
+
+    if needs_repair:
+        repairable = [f for f in findings if not f.fixable]
+        text = "\n".join(f"- [{f.check}] {f.path}: {f.message}" for f in repairable)
+        result = lint_repair(cfg, text, deep_report=deep_report)
+        if not result.ok:
+            print(f"repair failed: {result.reason}", file=sys.stderr)
+            return 1
+
+    remaining = lintmod.run_checks(cfg)
+    print(_render_findings(remaining, ""))
+    return 1 if remaining else 0
+
+
 def cmd_query(cfg: Config, question: str, *, save: bool = False) -> int:
     result = query(cfg, question, save=save)
     if not result.ok:
@@ -276,6 +325,8 @@ def main(argv=None) -> int:
         return cmd_review_list(cfg)
     if ns.command == "query":
         return cmd_query(cfg, ns.question, save=ns.save)
+    if ns.command == "lint":
+        return cmd_lint(cfg, deep=ns.deep, fix=ns.fix, yes=ns.yes)
     return 2
 
 
