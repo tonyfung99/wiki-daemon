@@ -8,7 +8,7 @@ from pathlib import Path
 
 from wiki_daemon.config import Config
 from wiki_daemon.importer import import_source
-from wiki_daemon.ops import ingest
+from wiki_daemon.ops import ingest, ingest_interactive
 from wiki_daemon.runtime import StatusFile, is_pid_alive
 from wiki_daemon.scaffold import init_vault
 from wiki_daemon.state import StateStore
@@ -25,9 +25,19 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("init", parents=[common], help="scaffold a new vault")
     ing = sub.add_parser("ingest", parents=[common], help="ingest one source file")
     ing.add_argument("file", help="path to a raw source .md")
+    ig = ing.add_mutually_exclusive_group()
+    ig.add_argument("--interactive", dest="interactive", action="store_true",
+                    default=None, help="ask clarifications live (default if a TTY)")
+    ig.add_argument("--no-interactive", dest="interactive", action="store_false",
+                    help="headless: queue clarifications to wiki/review/")
     imp = sub.add_parser("import", parents=[common],
                          help="copy a file into the vault and ingest it")
     imp.add_argument("file", help="path to any UTF-8 text file to import")
+    mg = imp.add_mutually_exclusive_group()
+    mg.add_argument("--interactive", dest="interactive", action="store_true",
+                    default=None, help="ask clarifications live (default if a TTY)")
+    mg.add_argument("--no-interactive", dest="interactive", action="store_false",
+                    help="headless: queue clarifications to wiki/review/")
     sub.add_parser("status", parents=[common], help="show processed count")
     doc = sub.add_parser("doctor", parents=[common],
                          help="validate iCloud + tooling on the daemon host")
@@ -52,9 +62,17 @@ def cmd_init(cfg: Config) -> int:
     return 0
 
 
-def cmd_ingest(cfg: Config, file: str) -> int:
+def _want_interactive(flag) -> bool:
+    """Resolve the tri-state flag: explicit wins, else auto-detect a TTY."""
+    return sys.stdin.isatty() if flag is None else flag
+
+
+def cmd_ingest(cfg: Config, file: str, *, interactive=None) -> int:
     store = StateStore(cfg.processed_json)
-    result = ingest(cfg, Path(file), store=store)
+    if _want_interactive(interactive):
+        result = ingest_interactive(cfg, Path(file), store=store)
+    else:
+        result = ingest(cfg, Path(file), store=store)
     if result.skipped:
         print("skipped (already processed)")
         return 0
@@ -65,7 +83,7 @@ def cmd_ingest(cfg: Config, file: str) -> int:
     return 1
 
 
-def cmd_import(cfg: Config, file: str) -> int:
+def cmd_import(cfg: Config, file: str, *, interactive=None) -> int:
     try:
         dest = import_source(cfg, Path(file))
     except (FileNotFoundError, ValueError) as exc:
@@ -74,7 +92,10 @@ def cmd_import(cfg: Config, file: str) -> int:
     print(f"imported {dest.name}")
 
     store = StateStore(cfg.processed_json)
-    result = ingest(cfg, dest, store=store)
+    if _want_interactive(interactive):
+        result = ingest_interactive(cfg, dest, store=store)
+    else:
+        result = ingest(cfg, dest, store=store)
     if result.skipped:
         print("skipped (already processed)")
         return 0
@@ -146,9 +167,9 @@ def main(argv=None) -> int:
     if ns.command == "init":
         return cmd_init(cfg)
     if ns.command == "ingest":
-        return cmd_ingest(cfg, ns.file)
+        return cmd_ingest(cfg, ns.file, interactive=ns.interactive)
     if ns.command == "import":
-        return cmd_import(cfg, ns.file)
+        return cmd_import(cfg, ns.file, interactive=ns.interactive)
     if ns.command == "status":
         return cmd_status(cfg)
     if ns.command == "doctor":

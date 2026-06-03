@@ -167,3 +167,48 @@ def test_main_serve_dispatches_to_daemon(monkeypatch, tmp_path):
     monkeypatch.setattr(daemon, "serve", fake_serve)
     rc = main(["serve", "--vault", str(tmp_path), "--reconcile-interval", "5"])
     assert rc == 0 and called["ri"] == 5.0
+
+
+def test_ingest_flags_parse_tristate():
+    parser = build_parser()
+    assert parser.parse_args(["ingest", "--vault", "/v", "f.md"]).interactive is None
+    assert parser.parse_args(["ingest", "--vault", "/v", "--interactive", "f.md"]).interactive is True
+    assert parser.parse_args(["ingest", "--vault", "/v", "--no-interactive", "f.md"]).interactive is False
+
+
+def test_cmd_ingest_uses_interactive_when_forced(tmp_path, monkeypatch, capsys):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    init_vault(cfg)
+    src = cfg.raw_sources / "a.md"
+    cfg.raw_sources.mkdir(parents=True, exist_ok=True)
+    src.write_text("---\ntype: source\ntitle: A\n---\nbody\n", encoding="utf-8")
+
+    import wiki_daemon.cli as cli
+    called = {"interactive": False}
+    def fake_interactive(cfg, path, *, store):
+        called["interactive"] = True
+        from wiki_daemon.ops import IngestResult
+        return IngestResult(ok=True, kind="ok")
+    monkeypatch.setattr(cli, "ingest_interactive", fake_interactive)
+
+    rc = cli.cmd_ingest(cfg, str(src), interactive=True)
+    assert rc == 0 and called["interactive"] is True
+
+
+def test_cmd_ingest_headless_when_forced_off(tmp_path, monkeypatch):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    init_vault(cfg)
+    src = cfg.raw_sources / "a.md"
+    cfg.raw_sources.mkdir(parents=True, exist_ok=True)
+    src.write_text("---\ntype: source\ntitle: A\n---\nbody\n", encoding="utf-8")
+
+    import wiki_daemon.cli as cli
+    called = {"headless": False}
+    def fake_ingest(cfg, path, *, store):
+        called["headless"] = True
+        from wiki_daemon.ops import IngestResult
+        return IngestResult(ok=True, kind="ok")
+    monkeypatch.setattr(cli, "ingest", fake_ingest)
+
+    rc = cli.cmd_ingest(cfg, str(src), interactive=False)
+    assert rc == 0 and called["headless"] is True
