@@ -6,9 +6,11 @@ import json
 import sys
 from pathlib import Path
 
+from wiki_daemon import lint as lintmod
 from wiki_daemon.config import Config
 from wiki_daemon.importer import import_source
 from wiki_daemon.ops import apply_clarification, ingest, ingest_interactive, query
+from wiki_daemon.ops import lint_deep, lint_repair
 from wiki_daemon.review import list_items, write_answer
 from wiki_daemon.runtime import StatusFile, is_pid_alive
 from wiki_daemon.scaffold import init_vault
@@ -62,6 +64,15 @@ def build_parser() -> argparse.ArgumentParser:
     qry.add_argument("question", help="the question to answer from the wiki")
     qry.add_argument("--save", action="store_true",
                      help="also file the answer as a wiki/queries/ page")
+
+    lnt = sub.add_parser("lint", parents=[common],
+                         help="health-check the wiki (--deep LLM scan, --fix repair)")
+    lnt.add_argument("--deep", action="store_true",
+                     help="also run an LLM semantic scan (contradictions, stale claims)")
+    lnt.add_argument("--fix", action="store_true",
+                     help="repair findings (deletes conflict-dupes + LLM repair pass)")
+    lnt.add_argument("--yes", action="store_true",
+                     help="skip the confirmation prompt for --fix")
     return p
 
 
@@ -181,6 +192,20 @@ def _render_status(cfg: Config) -> str:
 def cmd_status(cfg: Config) -> int:
     print(_render_status(cfg))
     return 0
+
+
+def _render_findings(findings, deep_report: str) -> str:
+    lines: list[str] = []
+    if not findings:
+        lines.append("wiki is clean — no mechanical findings")
+    else:
+        for f in findings:
+            lines.append(f"[{f.severity}] {f.check}  {f.path} — {f.message}")
+        fixable = sum(1 for f in findings if f.fixable)
+        lines.append(f"\n{len(findings)} findings ({fixable} fixable)")
+    if deep_report:
+        lines.append("\nSemantic findings (LLM):\n" + deep_report)
+    return "\n".join(lines)
 
 
 def _render_review(cfg: Config) -> str:

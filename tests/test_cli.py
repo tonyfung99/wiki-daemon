@@ -344,3 +344,34 @@ def test_cmd_query_failure_returns_1(tmp_path, monkeypatch, capsys):
                         QueryResult(ok=False, reason="claude failed: 401", kind="auth"))
     rc = cli.cmd_query(cfg, "q?", save=False)
     assert rc == 1 and "query failed" in capsys.readouterr().err
+
+
+from wiki_daemon.cli import _render_findings
+from wiki_daemon.lint import Finding
+
+
+def test_lint_parser_flags():
+    parser = build_parser()
+    ns = parser.parse_args(["lint", "--vault", "/v"])
+    assert ns.command == "lint" and ns.deep is False and ns.fix is False and ns.yes is False
+    ns2 = parser.parse_args(["lint", "--vault", "/v", "--deep", "--fix", "--yes"])
+    assert ns2.deep and ns2.fix and ns2.yes
+
+
+def test_render_findings_clean():
+    assert "clean" in _render_findings([], "").lower()
+
+
+def test_render_findings_groups_and_counts():
+    fs = [
+        Finding("dead_link", "error", "wiki/a.md", "bad link", False, ""),
+        Finding("conflict_duplicate", "warning", "wiki/b 2.md", "dupe", True, "delete_file"),
+    ]
+    out = _render_findings(fs, "")
+    assert "wiki/a.md" in out and "wiki/b 2.md" in out
+    assert "2 findings" in out and "1 fixable" in out
+
+
+def test_render_findings_includes_deep_section():
+    out = _render_findings([], "Contradiction between A and B")
+    assert "Semantic findings" in out and "Contradiction between A and B" in out
