@@ -37,15 +37,29 @@ files. The `raw/` → `wiki/` boundary is a firewall (the watcher only watches
 
 ## Install
 
+**Editable (development):**
+
 ```bash
 git clone https://github.com/tonyfung99/wiki-daemon.git
 cd wiki-daemon
 python3 -m venv .venv
 .venv/bin/pip install -e ".[dev]"
+# run it as: .venv/bin/wiki …
 ```
 
+**pipx (recommended for daily use)** — puts `wiki` on your PATH everywhere:
+
+```bash
+pipx install ~/workspace/wiki-daemon     # path to the cloned repo
+wiki --version
+```
+
+Either way you also need the **[`claude` CLI](https://docs.claude.com/en/docs/claude-code)**
+installed and authenticated — `wiki` shells out to headless `claude -p` for
+ingest/query/lint (for an unattended daemon use `claude setup-token`).
+
 This installs the **`wiki`** console script — manual commands (`init`, `ingest`,
-`import`, `status`, `doctor`) plus the daemon (`wiki serve`).
+`import`, `status`, `query`, `lint`, `doctor`) plus the daemon (`wiki serve`).
 
 ## Quickstart
 
@@ -88,7 +102,22 @@ title: Example post
 The clipped text goes here.
 ```
 
+## Choosing the vault
+
+`--vault <path>` works on every command, but is optional — `wiki` finds the
+vault by, in order: the `--vault` flag, the `WIKI_VAULT` environment variable, an
+upward search from the current directory (so just `cd` into a vault), then a
+`default_vault` in `~/.config/wiki/config.toml` (set it with
+`wiki init --set-default`).
+
+```bash
+cd "$VAULT" && wiki status        # discovered from the current directory
+export WIKI_VAULT="$VAULT"        # or set it once in your shell profile
+```
+
 ## Commands
+
+`--vault` is optional when the vault is discoverable (see *Choosing the vault*).
 
 | Command | What it does |
 |---|---|
