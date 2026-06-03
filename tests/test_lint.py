@@ -130,3 +130,58 @@ def test_run_checks_aggregates_sorted(tmp_path):
     findings = run_checks(cfg)
     assert any(f.check == "dead_link" for f in findings)
     assert findings == sorted(findings, key=lambda f: (f.severity, f.check, f.path))
+
+
+def test_orphan_self_link_does_not_save(tmp_path):
+    cfg = _cfg(tmp_path)
+    _page(cfg, "concepts", "narcissus.md", title="Narcissus",
+          body="I am [[Narcissus]].")  # links only to itself
+    _index(cfg)
+    _log(cfg)
+    paths = {f.path for f in _orphans(cfg)}
+    assert any(p.endswith("narcissus.md") for p in paths)  # still an orphan
+
+
+def test_run_checks_ignores_review_dir(tmp_path):
+    cfg = _cfg(tmp_path)
+    # a page under review/ with a dead link + unindexed title must be ignored
+    (cfg.wiki / "review" / "r.md").write_text(
+        "---\ntype: review\ntitle: R\n---\n[[Ghost]]\n", encoding="utf-8")
+    _index(cfg)
+    _log(cfg)
+    findings = run_checks(cfg)
+    assert all("r.md" not in f.path for f in findings)
+    assert not any(f.check == "dead_link" for f in findings)
+
+
+def test_sources_page_not_flagged_orphan(tmp_path):
+    cfg = _cfg(tmp_path)
+    # an unlinked, unindexed source page is exempt from orphan
+    (cfg.wiki / "sources" / "s.md").write_text(
+        "---\ntype: source\ntitle: S\nsources: []\n---\nx\n", encoding="utf-8")
+    _index(cfg)
+    _log(cfg)
+    assert not any(f.path.endswith("s.md") and f.check == "orphan"
+                   for f in _orphans(cfg))
+
+
+def test_index_integrity_sources_bare_string_trace(tmp_path):
+    cfg = _cfg(tmp_path)
+    (cfg.wiki / "sources" / "s.md").write_text(
+        "---\ntype: source\ntitle: S\nsources: raw/sources/missing.md\n---\nx\n",
+        encoding="utf-8")
+    _index(cfg, "S")
+    _log(cfg)
+    msgs = " ".join(f.message for f in _index_integrity(cfg))
+    assert "missing.md" in msgs
+
+
+def test_page_without_title_is_skipped_cleanly(tmp_path):
+    cfg = _cfg(tmp_path)
+    (cfg.wiki / "concepts" / "untitled.md").write_text(
+        "---\ntype: concept\n---\nbody with no title\n", encoding="utf-8")
+    _index(cfg)
+    _log(cfg)
+    # no orphan/index finding keyed to a None title; must not raise
+    findings = run_checks(cfg)
+    assert all("None" not in f.message for f in findings)

@@ -99,22 +99,21 @@ def _index_titles(cfg: Config) -> set[str]:
 
 def _orphans(cfg: Config) -> list[Finding]:
     indexed = _index_titles(cfg)
-    linked: set[str] = set()
     pages = list(_iter_pages(cfg))
+    # map each page to its title + the links in its body
+    page_info = []
     for p in pages:
-        _, body = parse(p.read_text(encoding="utf-8"))
-        linked.update(_links_in(body))
-    out: list[Finding] = []
-    for p in pages:
-        # sources/ pages are traced by sources:, not links — exempt
-        if p.parent.name == "sources":
-            continue
-        meta, _ = parse(p.read_text(encoding="utf-8"))
+        meta, body = parse(p.read_text(encoding="utf-8"))
         t = meta.get("title")
-        if t is None:
+        page_info.append((p, _norm(str(t)) if t is not None else None, _links_in(body)))
+    out: list[Finding] = []
+    for p, title, _own_links in page_info:
+        if p.parent.name == "sources" or title is None:
             continue
-        title = _norm(str(t))
-        if title not in linked and title not in indexed:
+        # linked-to by any OTHER page (self-links don't count)
+        linked_by_other = any(
+            title in links for q, _qt, links in page_info if q != p)
+        if not linked_by_other and title not in indexed:
             out.append(Finding(
                 "orphan", "warning", _rel(cfg, p),
                 "not linked from anywhere or indexed"))
