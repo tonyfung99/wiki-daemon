@@ -441,3 +441,33 @@ def test_cmd_lint_deep_appends_section(tmp_path, monkeypatch, capsys):
                         lambda cfg: LintScan(ok=True, report="Contradiction X vs Y"))
     rc = cmd_lint(cfg, deep=True, fix=False, yes=False)
     assert "Contradiction X vs Y" in capsys.readouterr().out
+
+
+def test_cmd_lint_fix_typed_abort_deletes_nothing(tmp_path, monkeypatch, capsys):
+    cfg = _seed_clean_vault(tmp_path)
+    (cfg.wiki / "concepts" / "a.md").write_text(
+        "---\ntype: concept\ntitle: A\n---\nx\n", encoding="utf-8")
+    dupe = cfg.wiki / "concepts" / "a 2.md"
+    dupe.write_text("---\ntype: concept\ntitle: A\n---\nx\n", encoding="utf-8")
+    (cfg.wiki / "index.md").write_text("# Index\n- [[A]] — x\n", encoding="utf-8")
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda *a: "no")  # decline at the prompt
+
+    rc = cmd_lint(cfg, deep=False, fix=True, yes=False)
+    assert rc == 0 and dupe.exists()  # aborted, nothing deleted
+    assert "aborted" in capsys.readouterr().out.lower()
+
+
+def test_cmd_lint_fix_repair_failure_returns_1(tmp_path, monkeypatch, capsys):
+    cfg = _seed_clean_vault(tmp_path)
+    # a dead link → a non-fixable finding → triggers the LLM repair pass
+    (cfg.wiki / "concepts" / "p.md").write_text(
+        "---\ntype: concept\ntitle: P\n---\n[[Nope]]\n", encoding="utf-8")
+    (cfg.wiki / "index.md").write_text("# Index\n- [[P]] — x\n", encoding="utf-8")
+    import wiki_daemon.cli as cli
+    from wiki_daemon.ops import ApplyResult
+    monkeypatch.setattr(cli, "lint_repair",
+                        lambda cfg, t, *, deep_report="": ApplyResult(ok=False, reason="boom"))
+
+    rc = cmd_lint(cfg, deep=False, fix=True, yes=True)
+    assert rc == 1 and "repair failed" in capsys.readouterr().err.lower()
