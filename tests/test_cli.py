@@ -264,3 +264,14 @@ def test_cmd_review_answer_unknown_id(tmp_path, capsys):
     import wiki_daemon.cli as cli
     rc = cli.cmd_review_answer(cfg, "nope", "x")
     assert rc == 1 and "no such" in capsys.readouterr().err.lower()
+
+
+def test_render_status_shows_review_count(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    cfg.review.mkdir(parents=True, exist_ok=True)
+    (cfg.review / "q1.md").write_text(
+        "---\ntype: review\nstatus: open\n---\nx\n", encoding="utf-8")
+    (cfg.review / "q2.md").write_text(
+        "---\ntype: review\nstatus: open\n---\nx\n", encoding="utf-8")
+    out = _render_status(cfg)
+    assert "review:" in out and "2 open" in out

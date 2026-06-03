@@ -152,11 +152,14 @@ def _render_status(cfg: Config) -> str:
     store = StateStore(cfg.processed_json)
     processed = len(store._data)  # noqa: SLF001
 
+    review_open = len(list(cfg.review.glob("*.md"))) if cfg.review.is_dir() else 0
+
     lines = [
         f"daemon:     {daemon}",
         f"auth:       {auth}",
         f"queue:      {pending} pending{ingesting}",
         f"processed:  {processed} sources",
+        f"review:     {review_open} open",
     ]
     if status.get("last_error"):
         e = status["last_error"]
