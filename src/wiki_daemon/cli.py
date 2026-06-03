@@ -8,7 +8,7 @@ from pathlib import Path
 
 from wiki_daemon.config import Config
 from wiki_daemon.importer import import_source
-from wiki_daemon.ops import apply_clarification, ingest, ingest_interactive
+from wiki_daemon.ops import apply_clarification, ingest, ingest_interactive, query
 from wiki_daemon.review import list_items, write_answer
 from wiki_daemon.runtime import StatusFile, is_pid_alive
 from wiki_daemon.scaffold import init_vault
@@ -56,6 +56,12 @@ def build_parser() -> argparse.ArgumentParser:
                              help="answer a clarification and apply it")
     ans.add_argument("id", help="review item id (filename without .md)")
     ans.add_argument("text", help="your answer")
+
+    qry = sub.add_parser("query", parents=[common],
+                         help="ask the wiki a question (read-only; --save files the answer)")
+    qry.add_argument("question", help="the question to answer from the wiki")
+    qry.add_argument("--save", action="store_true",
+                     help="also file the answer as a wiki/queries/ page")
     return p
 
 
@@ -206,6 +212,21 @@ def cmd_review_answer(cfg: Config, item_id: str, text: str) -> int:
     return 1
 
 
+def cmd_query(cfg: Config, question: str, *, save: bool = False) -> int:
+    result = query(cfg, question, save=save)
+    if not result.ok:
+        print(f"query failed: {result.reason}", file=sys.stderr)
+        return 1
+    print(result.answer)
+    if save:
+        if result.saved:
+            print("saved")
+        else:
+            print(f"save failed: {result.reason}", file=sys.stderr)
+            return 1
+    return 0
+
+
 def main(argv=None) -> int:
     ns = build_parser().parse_args(argv)
     cfg = _config(ns)
@@ -228,6 +249,8 @@ def main(argv=None) -> int:
         if ns.review_cmd == "answer":
             return cmd_review_answer(cfg, ns.id, ns.text)
         return cmd_review_list(cfg)
+    if ns.command == "query":
+        return cmd_query(cfg, ns.question, save=ns.save)
     return 2
 
 
