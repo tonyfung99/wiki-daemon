@@ -23,6 +23,15 @@ is a separate follow-up spec.
 - A saved query page is verified **by contract** (a `query:` frontmatter field
   echoing the question), not by guessing a filename — mirroring how ingest
   verifies via `sources:`. No `cites:` enforcement; cross-links live in the body.
+- **Rich Markdown answers, no code execution.** Karpathy's query can emit
+  "different forms… a comparison table, a slide deck (Marp), a chart." We support
+  the **text-renderable** subset now: comparison tables, **Mermaid** diagrams
+  (```mermaid fenced blocks that render from text), and **code snippets embedded
+  as fenced blocks** (e.g. the matplotlib code in a ```python block — included,
+  **not run**). On `--save`, the maintainer may also write **companion artifact
+  files** (e.g. a Marp deck `wiki/queries/<slug>-deck.md`) **alongside** the query
+  page, linked from it. Everything is Markdown/text via Write/Edit — **no Bash, no
+  code execution, no image generation** (deferred to a later phase).
 
 ## Commands
 
@@ -100,13 +109,17 @@ def query_prompt(question: str, *, save: bool = False) -> str: ...
 ```
 - Base: "Follow the QUERY operation in CLAUDE.md. Answer this question from the
   wiki, citing the pages you used: <question>. Read index.md, open relevant
-  pages, synthesize with [[wiki-links]] citations. Do not modify anything under
-  raw/."
-- `save=False` adds: "This is READ-ONLY — do not create or edit any files; just
-  print the answer."
+  pages, synthesize with [[wiki-links]] citations. Use rich Markdown where it
+  helps — comparison tables, Mermaid diagrams (```mermaid), and fenced code
+  snippets (e.g. ```python) — but do NOT execute code. Do not modify anything
+  under raw/."
+- `save=False` adds: "This is READ-ONLY — do not create or edit any files; print
+  the answer (Markdown, tables, and ```mermaid/code blocks are fine in the text)."
 - `save=True` adds: "Then SAVE-QUERY: write the answer as wiki/queries/<kebab>.md
   with frontmatter `type: query` and `query: \"<the question>\"`, update
-  wiki/index.md, and append to wiki/log.md."
+  wiki/index.md, and append to wiki/log.md. You MAY also write companion artifact
+  files alongside it (e.g. a Marp deck wiki/queries/<kebab>-deck.md) and link them
+  from the page — Markdown/text only, no code execution."
 
 ### `cli.py`
 
@@ -125,10 +138,15 @@ Add two sections (the `type: query` enum and `wiki/queries/` layer already exist
 
 - **QUERY operation** — read `index.md`, open the relevant pages, synthesize an
   answer that **cites** the pages used via `[[wiki-links]]`. Read-only by default.
+  Answers may use rich Markdown: comparison tables, **Mermaid** diagrams
+  (```mermaid blocks), and fenced **code snippets** (included for reference, never
+  executed).
 - **SAVE-QUERY** — when asked to save, also write `wiki/queries/<kebab-slug>.md`
   (`type: query`, `query:` = the question, `title`, `updated`), update
   `wiki/index.md`, and append `## [<YYYY-MM-DD>] query | <question>` to
-  `wiki/log.md`.
+  `wiki/log.md`. You MAY additionally write **companion artifact files** alongside
+  the query page (e.g. `wiki/queries/<kebab-slug>-deck.md` for a Marp deck) and
+  link them from the page — Markdown/text only, no code execution.
 
 ## Data flow
 
@@ -161,14 +179,23 @@ Fake runner, no real claude (mirrors `tests/test_ops.py`).
 - `_verify_query`: matches by normalized `query:` field; whitespace-tolerant;
   mismatched question → fail; missing index/log → fail.
 - claude failure → `ok=False`, `kind` set, no answer.
-- `prompts.query_prompt`: contains the question + "QUERY"; read-only variant says
-  read-only/no files; save variant mentions wiki/queries and `type: query`.
+- `prompts.query_prompt`: contains the question + "QUERY"; mentions rich Markdown
+  (Mermaid) and "do NOT execute code"; read-only variant says read-only/no files;
+  save variant mentions wiki/queries, `type: query`, and companion artifacts.
+- save query with a companion artifact: a fake runner that writes the query page
+  AND a `wiki/queries/<slug>-deck.md` → `saved=True` (companion files are optional
+  and not verified, but must not break verification).
 - CLI: parser accepts `query "<q>"` and `--save`; `cmd_query` prints the answer;
   `--save` prints `saved`/`save failed`; failure path returns 1.
 - template: `init` then assert `CLAUDE.md` contains "QUERY" and "SAVE-QUERY".
 
 ## Out of scope (YAGNI / later)
 
+- **Code execution for artifacts** — running the embedded snippets (matplotlib →
+  PNG, Bash, any rendering) to produce binary/image artifacts. We embed the code
+  and Mermaid as text now; *executing* it (adding the `Bash` tool + a Python/
+  matplotlib env under `--dangerously-skip-permissions`) is a deliberate later
+  phase.
 - HTTP API + hermes/Telegram (M3, original design.md §HTTP).
 - Caching answers / deciding to save after the fact (re-run with `--save`).
 - `cites: [...]` frontmatter enforcement (cross-links live in the body).
