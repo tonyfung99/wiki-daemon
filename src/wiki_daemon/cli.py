@@ -37,7 +37,10 @@ def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--vault", help="path to the vault", default=None)
 
-    sub.add_parser("init", parents=[common], help="scaffold a new vault")
+    ini = sub.add_parser("init", parents=[common],
+                         help="scaffold a new vault (defaults to the current dir)")
+    ini.add_argument("--set-default", action="store_true",
+                     help="record this vault as the default in ~/.config/wiki/config.toml")
     ing = sub.add_parser("ingest", parents=[common], help="ingest one source file")
     ing.add_argument("file", help="path to a raw source .md")
     _add_interactive_flags(ing)
@@ -99,9 +102,13 @@ def _config(ns) -> Config:
     return Config(vault=vault)
 
 
-def cmd_init(cfg: Config) -> int:
+def cmd_init(cfg: Config, *, set_default: bool = False) -> int:
     init_vault(cfg)
     print(f"initialized vault at {cfg.vault}")
+    if set_default:
+        from wiki_daemon.vault import write_config_vault
+        write_config_vault(_config_path(), cfg.vault)
+        print(f"set default vault → {cfg.vault}")
     return 0
 
 
@@ -325,7 +332,7 @@ def main(argv=None) -> int:
         return 0
     cfg = _config(ns)
     if ns.command == "init":
-        return cmd_init(cfg)
+        return cmd_init(cfg, set_default=ns.set_default)
     if ns.command == "ingest":
         return cmd_ingest(cfg, ns.file, interactive=ns.interactive)
     if ns.command == "import":

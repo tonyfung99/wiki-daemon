@@ -522,3 +522,32 @@ def test_explicit_vault_still_works(tmp_path, monkeypatch, capsys):
     init_vault(cfg0)
     rc = main(["status", "--vault", str(cfg0.vault)])
     assert rc == 0
+
+
+def test_init_scaffolds_cwd_without_vault(tmp_path, monkeypatch, capsys):
+    target = tmp_path / "newvault"
+    target.mkdir()
+    monkeypatch.setattr("pathlib.Path.cwd", lambda: target)
+    rc = main(["init"])
+    assert rc == 0
+    assert (target / "CLAUDE.md").exists() and (target / "wiki").is_dir()
+
+
+def test_init_set_default_writes_config(tmp_path, monkeypatch, capsys):
+    target = tmp_path / "v"
+    cfg_path = tmp_path / "cfg" / "config.toml"
+    monkeypatch.setattr("wiki_daemon.cli._config_path", lambda: cfg_path)
+    rc = main(["init", "--vault", str(target), "--set-default"])
+    assert rc == 0
+    from wiki_daemon.vault import read_config_vault
+    assert read_config_vault(cfg_path) == target.resolve()
+    out = capsys.readouterr().out.lower()
+    assert "default vault" in out
+
+
+def test_init_parser_has_set_default():
+    parser = build_parser()
+    ns = parser.parse_args(["init", "--vault", "/v", "--set-default"])
+    assert ns.set_default is True
+    ns2 = parser.parse_args(["init", "--vault", "/v"])
+    assert ns2.set_default is False
