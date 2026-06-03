@@ -212,3 +212,55 @@ def test_cmd_ingest_headless_when_forced_off(tmp_path, monkeypatch):
 
     rc = cli.cmd_ingest(cfg, str(src), interactive=False)
     assert rc == 0 and called["headless"] is True
+
+
+from wiki_daemon.cli import _render_review, cmd_review_answer
+
+
+def _seed_review(cfg, item_id="q1", status="open"):
+    cfg.review.mkdir(parents=True, exist_ok=True)
+    (cfg.review / f"{item_id}.md").write_text(
+        "---\ntype: review\nstatus: " + status + "\n"
+        "source: raw/sources/x.md\nquestion: \"Same concept?\"\n"
+        "tentative: \"t\"\ncreated: 2026-06-03\n---\nbody\n", encoding="utf-8")
+
+
+def test_render_review_lists_open(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    _seed_review(cfg)
+    out = _render_review(cfg)
+    assert "q1" in out and "open" in out and "Same concept?" in out
+
+
+def test_render_review_empty(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    out = _render_review(cfg)
+    assert "no open" in out.lower()
+
+
+def test_cmd_review_answer_runs_apply(tmp_path, monkeypatch, capsys):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    from wiki_daemon.scaffold import init_vault
+    init_vault(cfg)
+    _seed_review(cfg, "q1")
+
+    import wiki_daemon.cli as cli
+    from wiki_daemon.ops import ApplyResult
+    seen = {}
+    def fake_apply(cfg, rid):
+        seen["id"] = rid
+        from wiki_daemon.review import read_item
+        seen["status"] = read_item(cfg, rid).status
+        return ApplyResult(ok=True)
+    monkeypatch.setattr(cli, "apply_clarification", fake_apply)
+
+    rc = cli.cmd_review_answer(cfg, "q1", "they are the same")
+    assert rc == 0 and seen["id"] == "q1" and seen["status"] == "answered"
+    assert "resolved" in capsys.readouterr().out.lower()
+
+
+def test_cmd_review_answer_unknown_id(tmp_path, capsys):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    import wiki_daemon.cli as cli
+    rc = cli.cmd_review_answer(cfg, "nope", "x")
+    assert rc == 1 and "no such" in capsys.readouterr().err.lower()

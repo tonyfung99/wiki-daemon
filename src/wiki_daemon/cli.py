@@ -8,7 +8,8 @@ from pathlib import Path
 
 from wiki_daemon.config import Config
 from wiki_daemon.importer import import_source
-from wiki_daemon.ops import ingest, ingest_interactive
+from wiki_daemon.ops import apply_clarification, ingest, ingest_interactive
+from wiki_daemon.review import list_items, write_answer
 from wiki_daemon.runtime import StatusFile, is_pid_alive
 from wiki_daemon.scaffold import init_vault
 from wiki_daemon.state import StateStore
@@ -46,6 +47,14 @@ def build_parser() -> argparse.ArgumentParser:
     srv = sub.add_parser("serve", parents=[common],
                          help="run the daemon: watch raw/sources and ingest autonomously")
     srv.add_argument("--reconcile-interval", type=float, default=300.0)
+
+    rev = sub.add_parser("review", parents=[common],
+                         help="list/answer ingest clarifications")
+    rev_sub = rev.add_subparsers(dest="review_cmd")
+    ans = rev_sub.add_parser("answer", parents=[common],
+                             help="answer a clarification and apply it")
+    ans.add_argument("id", help="review item id (filename without .md)")
+    ans.add_argument("text", help="your answer")
     return p
 
 
@@ -161,6 +170,35 @@ def cmd_status(cfg: Config) -> int:
     return 0
 
 
+def _render_review(cfg: Config) -> str:
+    items = list_items(cfg)
+    if not items:
+        return "no open clarifications"
+    lines = []
+    for it in items:
+        lines.append(f"{it.id}  [{it.status}]  {it.source}\n    {it.question}")
+    return "\n".join(lines)
+
+
+def cmd_review_list(cfg: Config) -> int:
+    print(_render_review(cfg))
+    return 0
+
+
+def cmd_review_answer(cfg: Config, item_id: str, text: str) -> int:
+    try:
+        write_answer(cfg, item_id, text)
+    except FileNotFoundError as exc:
+        print(f"no such review item: {exc}", file=sys.stderr)
+        return 1
+    result = apply_clarification(cfg, item_id)
+    if result.ok:
+        print(f"resolved {item_id}")
+        return 0
+    print(f"apply failed: {result.reason}", file=sys.stderr)
+    return 1
+
+
 def main(argv=None) -> int:
     ns = build_parser().parse_args(argv)
     cfg = _config(ns)
@@ -179,6 +217,10 @@ def main(argv=None) -> int:
         # Lazy import: keeps watchdog/FSEvents out of the manual commands.
         from wiki_daemon.daemon import serve
         return serve(cfg, reconcile_interval=ns.reconcile_interval)
+    if ns.command == "review":
+        if ns.review_cmd == "answer":
+            return cmd_review_answer(cfg, ns.id, ns.text)
+        return cmd_review_list(cfg)
     return 2
 
 
