@@ -71,3 +71,62 @@ def test_conflict_duplicate_flagged_only_when_base_exists(tmp_path):
     f = findings[0]
     assert f.path.endswith("photosynthesis 2.md")
     assert f.fixable is True and f.fix_action == "delete_file"
+
+
+# append to tests/test_lint.py
+from wiki_daemon.lint import _orphans, _index_integrity, run_checks
+
+
+def _index(cfg, *titles):
+    body = "# Index\n" + "".join(f"- [[{t}]] — x\n" for t in titles)
+    (cfg.wiki / "index.md").write_text(body, encoding="utf-8")
+
+
+def _log(cfg):
+    (cfg.wiki / "log.md").write_text("# Log\n", encoding="utf-8")
+
+
+def test_orphan_flagged_linked_or_indexed_clean(tmp_path):
+    cfg = _cfg(tmp_path)
+    _page(cfg, "concepts", "lonely.md", title="Lonely")     # orphan
+    _page(cfg, "concepts", "seen.md", title="Seen")          # indexed
+    _page(cfg, "concepts", "ref.md", title="Ref",
+          body="see [[Linked]]")
+    _page(cfg, "concepts", "linked.md", title="Linked")      # linked-to
+    _index(cfg, "Seen")
+    _log(cfg)
+    paths = {f.path for f in _orphans(cfg)}
+    assert any(p.endswith("lonely.md") for p in paths)
+    assert not any(p.endswith("seen.md") for p in paths)
+    assert not any(p.endswith("linked.md") for p in paths)
+
+
+def test_index_integrity_missing_entry_and_broken_source_trace(tmp_path):
+    cfg = _cfg(tmp_path)
+    _page(cfg, "concepts", "a.md", title="A")  # not in index
+    (cfg.wiki / "sources" / "s.md").write_text(
+        "---\ntype: source\ntitle: S\nsources: [raw/sources/missing.md]\n---\nx\n",
+        encoding="utf-8")
+    _index(cfg, "S")  # A missing; S present
+    _log(cfg)
+    findings = _index_integrity(cfg)
+    msgs = " ".join(f.message for f in findings)
+    assert "missing from index" in msgs
+    assert "missing.md" in msgs
+
+
+def test_index_integrity_flags_missing_index_and_log(tmp_path):
+    cfg = _cfg(tmp_path)  # no index.md/log.md written
+    findings = _index_integrity(cfg)
+    joined = " ".join(f.message for f in findings)
+    assert "index.md" in joined and "log.md" in joined
+
+
+def test_run_checks_aggregates_sorted(tmp_path):
+    cfg = _cfg(tmp_path)
+    _page(cfg, "concepts", "p.md", title="P", body="[[Nope]]")
+    _index(cfg, "P")
+    _log(cfg)
+    findings = run_checks(cfg)
+    assert any(f.check == "dead_link" for f in findings)
+    assert findings == sorted(findings, key=lambda f: (f.severity, f.check, f.path))
