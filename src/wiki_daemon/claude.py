@@ -49,7 +49,7 @@ def run_claude(
     skip_permissions: bool = True,
     runner: Runner = _subprocess_runner,
 ) -> ClaudeResult:
-    cmd = [claude_bin, "-p", prompt, "--allowed-tools", ",".join(allowed_tools)]
+    cmd = [claude_bin, "-p", prompt, "--allowed-tools", *allowed_tools]
     if skip_permissions:
         # Headless: the daemon cannot answer interactive permission prompts.
         cmd.append("--dangerously-skip-permissions")
@@ -82,7 +82,7 @@ def run_claude_interactive(
 ) -> int:
     """Launch `claude` WITHOUT -p so the model can ask and the user can answer
     live. Returns the process exit code."""
-    cmd = [claude_bin, prompt, "--allowed-tools", ",".join(allowed_tools)]
+    cmd = [claude_bin, prompt, "--allowed-tools", *allowed_tools]
     if skip_permissions:
         cmd.append("--dangerously-skip-permissions")
     return runner(cmd, Path(cwd))

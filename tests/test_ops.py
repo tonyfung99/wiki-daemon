@@ -257,3 +257,95 @@ def test_ingest_interactive_skips_already_processed(tmp_path):
     result = ingest_interactive(cfg, src, store=store, runner=counting_runner)
     assert result.skipped is True and result.kind == "skipped"
     assert called["n"] == 0  # never launched claude
+
+
+from wiki_daemon.ops import query, QueryResult, _verify_query
+
+
+def test_query_readonly_returns_stdout_and_uses_readonly_tools(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    from wiki_daemon.scaffold import init_vault
+    init_vault(cfg)
+    seen = {}
+
+    def runner(cmd, cwd, timeout):
+        seen["cmd"] = cmd
+        return 0, "Photosynthesis converts light to chemical energy.", ""
+
+    result = query(cfg, "What is photosynthesis?", runner=runner)
+    assert isinstance(result, QueryResult)
+    assert result.ok is True
+    assert result.answer == "Photosynthesis converts light to chemical energy."
+    assert result.saved is False
+    assert "Write" not in seen["cmd"] and "Edit" not in seen["cmd"]
+
+
+def test_query_claude_failure_sets_kind(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    from wiki_daemon.scaffold import init_vault
+    init_vault(cfg)
+
+    def runner(cmd, cwd, timeout):
+        return 1, "", "API Error: 401 Invalid authentication credentials"
+
+    result = query(cfg, "q?", runner=runner)
+    assert result.ok is False and result.kind == "auth" and result.answer == ""
+
+
+def test_query_save_success_verifies_query_page(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    from wiki_daemon.scaffold import init_vault
+    init_vault(cfg)
+
+    def runner(cmd, cwd, timeout):
+        assert "Write" in cmd
+        (cfg.wiki / "queries" / "photosynthesis.md").write_text(
+            "---\ntype: query\nquery: \"What is photosynthesis?\"\n---\nanswer\n",
+            encoding="utf-8")
+        return 0, "the answer", ""
+
+    result = query(cfg, "What is photosynthesis?", save=True, runner=runner)
+    assert result.ok is True and result.saved is True
+    assert result.answer == "the answer"
+
+
+def test_query_save_with_companion_artifact_still_saved(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    from wiki_daemon.scaffold import init_vault
+    init_vault(cfg)
+
+    def runner(cmd, cwd, timeout):
+        (cfg.wiki / "queries" / "q.md").write_text(
+            "---\ntype: query\nquery: \"Q\"\n---\nanswer\n", encoding="utf-8")
+        (cfg.wiki / "queries" / "q-deck.md").write_text("# Deck\n", encoding="utf-8")
+        return 0, "a", ""
+
+    result = query(cfg, "Q", save=True, runner=runner)
+    assert result.saved is True
+
+
+def test_query_save_failure_when_no_page_written(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    from wiki_daemon.scaffold import init_vault
+    init_vault(cfg)
+
+    def runner(cmd, cwd, timeout):
+        return 0, "the answer", ""
+
+    result = query(cfg, "Q", save=True, runner=runner)
+    assert result.ok is True and result.saved is False
+    assert "query page" in result.reason
+    assert result.answer == "the answer"
+
+
+def test_verify_query_matches_whitespace_insensitively(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    from wiki_daemon.scaffold import init_vault
+    init_vault(cfg)
+    (cfg.wiki / "queries" / "p.md").write_text(
+        "---\ntype: query\nquery: \"What   is  photosynthesis?\"\n---\nx\n",
+        encoding="utf-8")
+    ok, _ = _verify_query(cfg, "What is photosynthesis?")
+    assert ok is True
+    ok2, reason = _verify_query(cfg, "A different question?")
+    assert ok2 is False and "query page" in reason
