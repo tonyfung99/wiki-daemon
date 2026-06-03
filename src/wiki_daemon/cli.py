@@ -189,7 +189,7 @@ def cmd_review_answer(cfg: Config, item_id: str, text: str) -> int:
     try:
         write_answer(cfg, item_id, text)
     except FileNotFoundError as exc:
-        print(f"no such review item: {exc}", file=sys.stderr)
+        print(f"review answer failed: {exc}", file=sys.stderr)
         return 1
     result = apply_clarification(cfg, item_id)
     if result.ok:
