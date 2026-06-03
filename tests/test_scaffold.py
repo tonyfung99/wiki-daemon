@@ -43,3 +43,13 @@ def test_template_has_query_sections(tmp_path):
     assert "## QUERY operation" in text
     assert "## SAVE-QUERY" in text
     assert "type: query" in text
+
+
+def test_template_has_lint_sections(tmp_path):
+    from wiki_daemon.config import Config
+    from wiki_daemon.scaffold import init_vault
+    cfg = Config(vault=tmp_path)
+    init_vault(cfg)
+    text = (cfg.vault / "CLAUDE.md").read_text(encoding="utf-8")
+    assert "## LINT operation" in text
+    assert "## LINT REPAIR" in text
