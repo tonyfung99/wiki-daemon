@@ -90,9 +90,10 @@ The clipped text goes here.
 | Command | What it does |
 |---|---|
 | `wiki init --vault <path>` | Scaffold a vault (`CLAUDE.md`, `purpose.md`, `raw/`, `wiki/`). Idempotent. |
-| `wiki ingest --vault <path> <file>` | Ingest one source file now (runs `claude -p`, verifies, records it). |
-| `wiki import --vault <path> <file>` | Copy any UTF-8 text file into `raw/sources/` (adds frontmatter if missing) and ingest it. The original is left in place. |
-| `wiki status --vault <path>` | Show daemon health: running?, auth state, queue depth, processed count, last error. |
+| `wiki ingest --vault <path> [--interactive\|--no-interactive] <file>` | Ingest one source now. Interactive (the default in a terminal) asks clarifications live; headless queues them to `wiki/review/`. |
+| `wiki import --vault <path> [--interactive\|--no-interactive] <file>` | Copy any UTF-8 text file into `raw/sources/` (adds frontmatter if missing) and ingest it (same interactive/headless behavior as `ingest`). The original is left in place. |
+| `wiki status --vault <path>` | Show daemon health: running?, auth state, queue depth, processed count, open clarifications, last error. |
+| `wiki review --vault <path>` | List open ingest clarifications. `wiki review answer <id> "…"` records your answer and applies it. |
 | `wiki doctor --vault <path> [--probe <file>]` | Validate environment, tooling, and iCloud handling on the host. |
 | `wiki serve --vault <path> [--reconcile-interval N]` | Run the daemon: watch `raw/sources/` and ingest autonomously. |
 
@@ -114,6 +115,10 @@ change how your wiki is built.
   its state dir; `wiki status` surfaces health; `wiki doctor` verifies `claude`
   is authenticated (headless `claude -p` needs its own valid login — use
   `claude setup-token` for an unattended daemon).
+- **Clarifications** = when a structural decision is ambiguous, an interactive
+  ingest asks you live; otherwise (scripts, the daemon) the maintainer files an
+  open question under `wiki/review/`. Resolve later with `wiki review` and
+  `wiki review answer <id> "…"`, which runs a maintainer pass to apply it.
 
 ## Docs
 
