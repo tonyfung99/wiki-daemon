@@ -152,3 +152,108 @@ def test_ingest_skip_kind(tmp_path):
     store.mark_processed(read_source(src).sha256, str(src))
     result = ingest(cfg, src, store=store, runner=_lazy_claude)
     assert result.skipped is True and result.kind == "skipped"
+
+
+from wiki_daemon.ops import ingest_interactive, apply_clarification, ApplyResult
+
+
+def test_ingest_interactive_success(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    from wiki_daemon.scaffold import init_vault
+    init_vault(cfg)
+    src = _make_source(cfg)
+    store = StateStore(cfg.processed_json)
+
+    def interactive_runner(cmd, cwd):
+        (cfg.wiki / "sources" / "acme-corp.md").write_text(
+            "---\ntype: source\nsources: [raw/sources/" + src.name + "]\n---\nsummary\n",
+            encoding="utf-8")
+        (cfg.wiki / "index.md").write_text("# Index\n", encoding="utf-8")
+        (cfg.wiki / "log.md").write_text("# Log\n", encoding="utf-8")
+        return 0
+
+    result = ingest_interactive(cfg, src, store=store, runner=interactive_runner)
+    assert result.ok is True and result.kind == "ok"
+    from wiki_daemon.sources import read_source
+    assert store.is_processed(read_source(src).sha256)
+
+
+def test_ingest_interactive_nonzero_not_processed(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    from wiki_daemon.scaffold import init_vault
+    init_vault(cfg)
+    src = _make_source(cfg)
+    store = StateStore(cfg.processed_json)
+
+    result = ingest_interactive(cfg, src, store=store, runner=lambda cmd, cwd: 1)
+    assert result.ok is False and result.kind == "claude_error"
+    from wiki_daemon.sources import read_source
+    assert store.is_processed(read_source(src).sha256) is False
+
+
+def _seed_answered_review(cfg, item_id="q1"):
+    cfg.review.mkdir(parents=True, exist_ok=True)
+    (cfg.review / f"{item_id}.md").write_text(
+        "---\ntype: review\nstatus: answered\n"
+        "source: raw/sources/x.md\nquestion: \"q?\"\ntentative: \"t\"\n"
+        "answer: \"a\"\ncreated: 2026-06-03\n---\nbody\n", encoding="utf-8")
+    return cfg.review / f"{item_id}.md"
+
+
+def test_apply_clarification_success_deletes_file(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    from wiki_daemon.scaffold import init_vault
+    init_vault(cfg)
+    path = _seed_answered_review(cfg)
+
+    def runner(cmd, cwd, timeout):
+        path.unlink()
+        return 0, "ok\n", ""
+
+    result = apply_clarification(cfg, "q1", runner=runner)
+    assert isinstance(result, ApplyResult)
+    assert result.ok is True
+    assert not path.exists()
+
+
+def test_apply_clarification_unanswered_fails(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    from wiki_daemon.scaffold import init_vault
+    init_vault(cfg)
+    cfg.review.mkdir(parents=True, exist_ok=True)
+    (cfg.review / "q2.md").write_text(
+        "---\ntype: review\nstatus: open\nsource: raw/sources/x.md\n"
+        "question: \"q?\"\ntentative: \"t\"\ncreated: 2026-06-03\n---\nbody\n",
+        encoding="utf-8")
+    calls = {"n": 0}
+    result = apply_clarification(cfg, "q2", runner=lambda *a, **k: calls.__setitem__("n", 1) or (0, "", ""))
+    assert result.ok is False and "answered" in result.reason
+    assert calls["n"] == 0
+
+
+def test_apply_clarification_file_not_removed_fails(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    from wiki_daemon.scaffold import init_vault
+    init_vault(cfg)
+    _seed_answered_review(cfg, "q3")
+    result = apply_clarification(cfg, "q3", runner=lambda cmd, cwd, timeout: (0, "ok", ""))
+    assert result.ok is False and "not removed" in result.reason
+
+
+def test_ingest_interactive_skips_already_processed(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    from wiki_daemon.scaffold import init_vault
+    init_vault(cfg)
+    src = _make_source(cfg)
+    store = StateStore(cfg.processed_json)
+    from wiki_daemon.sources import read_source
+    store.mark_processed(read_source(src).sha256, str(src))
+
+    called = {"n": 0}
+    def counting_runner(cmd, cwd):
+        called["n"] += 1
+        return 0
+
+    result = ingest_interactive(cfg, src, store=store, runner=counting_runner)
+    assert result.skipped is True and result.kind == "skipped"
+    assert called["n"] == 0  # never launched claude

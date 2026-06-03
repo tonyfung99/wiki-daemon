@@ -11,6 +11,7 @@ working directory.
   - `wiki/concepts/` — ideas, theories, methods (one page each)
   - `wiki/sources/` — exactly one summary page per raw source
   - `wiki/queries/` — saved query answers
+  - `wiki/review/` — open clarifications you raised during ingest (one file each)
   - `wiki/index.md` — catalog of every page with a one-line summary, by category
   - `wiki/log.md` — append-only operation history
 
@@ -42,3 +43,33 @@ Given one source file path:
 6. Append one line to `wiki/log.md`:
    `## [<YYYY-MM-DD>] ingest | <source title or url>`
 7. Do not edit anything under `raw/`.
+
+## RAISE CLARIFICATION (during INGEST)
+When a structural decision is genuinely ambiguous — which entity a name refers
+to, conflicting facts across sources, whether two things are the same concept,
+or missing context you cannot infer — do NOT stall:
+1. Make a best-effort choice and note it briefly on the affected page.
+2. Record the open question as `wiki/review/<kebab-slug>.md` with frontmatter:
+   ```
+   ---
+   type: review
+   status: open
+   source: raw/sources/<file>.md
+   question: "<the specific question for the user>"
+   tentative: "<the best-effort choice you made>"
+   created: <YYYY-MM-DD>
+   ---
+   <optional context>
+   ```
+Ingest still completes normally; the source is fully processed. If you are told
+this is an interactive session, ASK the user directly and wait instead of
+writing a review file.
+
+## APPLY CLARIFICATION
+Given one answered review file (`status: answered`, with an `answer:` field):
+1. Read its `question`, `tentative`, and `answer`.
+2. Apply the answer to the relevant wiki pages (rename/merge/split/relink as
+   needed), preserving the `sources:` traceability.
+3. Append one line to `wiki/log.md`:
+   `## [<YYYY-MM-DD>] review | <question>`
+4. DELETE the review file (resolution = removal).

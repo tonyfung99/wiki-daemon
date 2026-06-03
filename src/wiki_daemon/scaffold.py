@@ -13,7 +13,8 @@ _TEMPLATES = {
     "wiki/index.md": "index.md",
     "wiki/log.md": "log.md",
 }
-_DIRS = ["raw/sources", "wiki/entities", "wiki/concepts", "wiki/sources", "wiki/queries"]
+_DIRS = ["raw/sources", "wiki/entities", "wiki/concepts", "wiki/sources",
+         "wiki/queries", "wiki/review"]
 
 
 def _template_text(name: str) -> str:

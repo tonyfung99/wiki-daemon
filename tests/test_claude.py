@@ -84,3 +84,28 @@ def test_run_claude_catches_missing_binary():
         raise FileNotFoundError("claude")
     r = run_claude("p", cwd=".", allowed_tools=["Read"], runner=boom)
     assert r.ok is False and r.returncode == 127 and "not found" in r.stderr.lower()
+
+
+from wiki_daemon.claude import run_claude_interactive
+
+
+def test_run_claude_interactive_builds_argv_without_dash_p():
+    seen = {}
+    def runner(cmd, cwd):
+        seen["cmd"] = cmd
+        return 0
+    code = run_claude_interactive("hello", cwd=".", allowed_tools=["Read", "Write"],
+                                  runner=runner)
+    assert code == 0
+    assert "-p" not in seen["cmd"]
+    assert seen["cmd"][0] == "claude"
+    assert "hello" in seen["cmd"]
+    assert "--allowed-tools" in seen["cmd"]
+    assert "Read,Write" in seen["cmd"]
+    assert "--dangerously-skip-permissions" in seen["cmd"]
+
+
+def test_run_claude_interactive_returns_runner_code():
+    code = run_claude_interactive("p", cwd=".", allowed_tools=["Read"],
+                                  runner=lambda cmd, cwd: 3)
+    assert code == 3

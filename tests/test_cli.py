@@ -167,3 +167,122 @@ def test_main_serve_dispatches_to_daemon(monkeypatch, tmp_path):
     monkeypatch.setattr(daemon, "serve", fake_serve)
     rc = main(["serve", "--vault", str(tmp_path), "--reconcile-interval", "5"])
     assert rc == 0 and called["ri"] == 5.0
+
+
+def test_ingest_flags_parse_tristate():
+    parser = build_parser()
+    assert parser.parse_args(["ingest", "--vault", "/v", "f.md"]).interactive is None
+    assert parser.parse_args(["ingest", "--vault", "/v", "--interactive", "f.md"]).interactive is True
+    assert parser.parse_args(["ingest", "--vault", "/v", "--no-interactive", "f.md"]).interactive is False
+
+
+def test_cmd_ingest_uses_interactive_when_forced(tmp_path, monkeypatch, capsys):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    init_vault(cfg)
+    src = cfg.raw_sources / "a.md"
+    cfg.raw_sources.mkdir(parents=True, exist_ok=True)
+    src.write_text("---\ntype: source\ntitle: A\n---\nbody\n", encoding="utf-8")
+
+    import wiki_daemon.cli as cli
+    called = {"interactive": False}
+    def fake_interactive(cfg, path, *, store):
+        called["interactive"] = True
+        from wiki_daemon.ops import IngestResult
+        return IngestResult(ok=True, kind="ok")
+    monkeypatch.setattr(cli, "ingest_interactive", fake_interactive)
+
+    rc = cli.cmd_ingest(cfg, str(src), interactive=True)
+    assert rc == 0 and called["interactive"] is True
+
+
+def test_cmd_ingest_headless_when_forced_off(tmp_path, monkeypatch):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    init_vault(cfg)
+    src = cfg.raw_sources / "a.md"
+    cfg.raw_sources.mkdir(parents=True, exist_ok=True)
+    src.write_text("---\ntype: source\ntitle: A\n---\nbody\n", encoding="utf-8")
+
+    import wiki_daemon.cli as cli
+    called = {"headless": False}
+    def fake_ingest(cfg, path, *, store):
+        called["headless"] = True
+        from wiki_daemon.ops import IngestResult
+        return IngestResult(ok=True, kind="ok")
+    monkeypatch.setattr(cli, "ingest", fake_ingest)
+
+    rc = cli.cmd_ingest(cfg, str(src), interactive=False)
+    assert rc == 0 and called["headless"] is True
+
+
+from wiki_daemon.cli import _render_review, cmd_review_answer
+
+
+def _seed_review(cfg, item_id="q1", status="open"):
+    cfg.review.mkdir(parents=True, exist_ok=True)
+    (cfg.review / f"{item_id}.md").write_text(
+        "---\ntype: review\nstatus: " + status + "\n"
+        "source: raw/sources/x.md\nquestion: \"Same concept?\"\n"
+        "tentative: \"t\"\ncreated: 2026-06-03\n---\nbody\n", encoding="utf-8")
+
+
+def test_render_review_lists_open(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    _seed_review(cfg)
+    out = _render_review(cfg)
+    assert "q1" in out and "open" in out and "Same concept?" in out
+
+
+def test_render_review_empty(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    out = _render_review(cfg)
+    assert "no open" in out.lower()
+
+
+def test_cmd_review_answer_runs_apply(tmp_path, monkeypatch, capsys):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    from wiki_daemon.scaffold import init_vault
+    init_vault(cfg)
+    _seed_review(cfg, "q1")
+
+    import wiki_daemon.cli as cli
+    from wiki_daemon.ops import ApplyResult
+    seen = {}
+    def fake_apply(cfg, rid):
+        seen["id"] = rid
+        from wiki_daemon.review import read_item
+        seen["status"] = read_item(cfg, rid).status
+        return ApplyResult(ok=True)
+    monkeypatch.setattr(cli, "apply_clarification", fake_apply)
+
+    rc = cli.cmd_review_answer(cfg, "q1", "they are the same")
+    assert rc == 0 and seen["id"] == "q1" and seen["status"] == "answered"
+    assert "resolved" in capsys.readouterr().out.lower()
+
+
+def test_cmd_review_answer_unknown_id(tmp_path, capsys):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    import wiki_daemon.cli as cli
+    rc = cli.cmd_review_answer(cfg, "nope", "x")
+    assert rc == 1 and "no such" in capsys.readouterr().err.lower()
+
+
+def test_render_status_shows_review_count(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    cfg.review.mkdir(parents=True, exist_ok=True)
+    (cfg.review / "q1.md").write_text(
+        "---\ntype: review\nstatus: open\n---\nx\n", encoding="utf-8")
+    (cfg.review / "q2.md").write_text(
+        "---\ntype: review\nstatus: open\n---\nx\n", encoding="utf-8")
+    out = _render_status(cfg)
+    assert "review:" in out and "2 open" in out
+
+
+def test_want_interactive_autodetects_tty(monkeypatch):
+    import wiki_daemon.cli as cli
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    assert cli._want_interactive(None) is True
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    assert cli._want_interactive(None) is False
+    # explicit flag always wins over the TTY check
+    assert cli._want_interactive(True) is True
+    assert cli._want_interactive(False) is False

@@ -34,6 +34,10 @@ class Config:
         return self.vault / "wiki"
 
     @property
+    def review(self) -> Path:
+        return self.vault / "wiki" / "review"
+
+    @property
     def claude_md(self) -> Path:
         return self.vault / "CLAUDE.md"
 

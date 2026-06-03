@@ -22,3 +22,9 @@ def test_state_dir_under_state_root(tmp_path):
     cfg = Config(vault=tmp_path / "A", state_root=tmp_path / "root")
     assert cfg.state_dir == (tmp_path / "root" / cfg.vault_id)
     assert cfg.processed_json == cfg.state_dir / "processed.json"
+
+
+def test_review_path_under_wiki(tmp_path):
+    from wiki_daemon.config import Config
+    cfg = Config(vault=tmp_path)
+    assert cfg.review == tmp_path / "wiki" / "review"

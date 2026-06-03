@@ -61,3 +61,28 @@ def run_claude(
         return ClaudeResult(ok=False, returncode=127, stdout="",
                             stderr="claude binary not found")
     return ClaudeResult(ok=(code == 0), returncode=code, stdout=out, stderr=err)
+
+
+# Interactive runner (cmd, cwd) -> returncode. No capture: stdio is inherited so
+# the user can converse with claude in their terminal.
+InteractiveRunner = Callable[[list[str], Path], int]
+
+
+def _interactive_subprocess_runner(cmd: list[str], cwd: Path) -> int:
+    return subprocess.run(cmd, cwd=str(cwd)).returncode
+
+
+def run_claude_interactive(
+    prompt: str,
+    cwd: Path,
+    allowed_tools: list[str],
+    claude_bin: str = "claude",
+    skip_permissions: bool = True,
+    runner: InteractiveRunner = _interactive_subprocess_runner,
+) -> int:
+    """Launch `claude` WITHOUT -p so the model can ask and the user can answer
+    live. Returns the process exit code."""
+    cmd = [claude_bin, prompt, "--allowed-tools", ",".join(allowed_tools)]
+    if skip_permissions:
+        cmd.append("--dangerously-skip-permissions")
+    return runner(cmd, Path(cwd))
