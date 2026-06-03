@@ -102,3 +102,23 @@ When asked to save a query answer, additionally:
 3. Update `wiki/index.md` to list the new page.
 4. Append one line to `wiki/log.md`:
    `## [<YYYY-MM-DD>] query | <question>`
+
+## LINT operation
+Read-only health check. Scan the wiki and report (do not modify files):
+- **Contradictions** — pages that assert conflicting facts.
+- **Stale claims** — statements likely outdated given other pages.
+- **Data gaps** — entities/concepts referenced but thinly covered.
+List each issue with the page(s) involved.
+
+## LINT REPAIR
+Given a list of findings, fix each, then keep the catalog consistent:
+1. **Dead link** — create the missing page (if it should exist) OR remove the
+   `[[link]]` (if not), using your judgment.
+2. **Orphan** — link it from a relevant page and/or add it to `wiki/index.md`.
+3. **Index gap** — add the page to `wiki/index.md` with a one-line summary.
+4. **Contradiction / stale claim** — reconcile the pages, keeping the accurate
+   statement and cross-linking.
+Preserve every page's `sources:` traceability. Update `wiki/index.md` and append
+one line to `wiki/log.md`:
+`## [<YYYY-MM-DD>] lint | <short summary of what you fixed>`
+Never modify anything under `raw/`.

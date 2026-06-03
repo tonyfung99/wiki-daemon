@@ -9,7 +9,10 @@ from wiki_daemon.claude import (
 )
 from wiki_daemon.config import Config
 from wiki_daemon.frontmatter import parse
-from wiki_daemon.prompts import ingest_prompt, apply_clarification_prompt, query_prompt
+from wiki_daemon.prompts import (
+    ingest_prompt, apply_clarification_prompt, query_prompt,
+    lint_prompt, lint_repair_prompt,
+)
 from wiki_daemon.sources import read_source
 from wiki_daemon.state import StateStore
 
@@ -36,6 +39,14 @@ class QueryResult:
     ok: bool
     answer: str = ""
     saved: bool = False
+    reason: str = ""
+    kind: str = ""
+
+
+@dataclass
+class LintScan:
+    ok: bool
+    report: str = ""
     reason: str = ""
     kind: str = ""
 
@@ -224,3 +235,30 @@ def query(cfg: Config, question: str, *, save: bool = False,
     ok2, reason = _verify_query(cfg, question)
     return QueryResult(ok=True, answer=answer, saved=ok2,
                        reason=("" if ok2 else reason))
+
+
+def lint_deep(cfg: Config, *, runner: Runner | None = None) -> LintScan:
+    """Read-only LLM semantic scan: contradictions, stale claims, data gaps."""
+    kwargs = {} if runner is None else {"runner": runner}
+    result = run_claude(
+        prompt=lint_prompt(), cwd=cfg.vault, allowed_tools=_READ_ONLY_TOOLS,
+        claude_bin=cfg.claude_bin, **kwargs,
+    )
+    if not result.ok:
+        return LintScan(ok=False, kind=classify_failure(result),
+                        reason=f"claude failed: {result.stderr[:200]}")
+    return LintScan(ok=True, report=result.stdout)
+
+
+def lint_repair(cfg: Config, findings_text: str, *, deep_report: str = "",
+                runner: Runner | None = None) -> ApplyResult:
+    """LLM repair pass (Write/Edit) that fixes the listed findings per CLAUDE.md."""
+    kwargs = {} if runner is None else {"runner": runner}
+    result = run_claude(
+        prompt=lint_repair_prompt(findings_text, deep_report),
+        cwd=cfg.vault, allowed_tools=_ALLOWED_TOOLS,
+        claude_bin=cfg.claude_bin, **kwargs,
+    )
+    if not result.ok:
+        return ApplyResult(ok=False, reason=f"claude failed: {result.stderr[:200]}")
+    return ApplyResult(ok=True)

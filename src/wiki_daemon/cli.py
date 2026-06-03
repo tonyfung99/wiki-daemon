@@ -6,9 +6,11 @@ import json
 import sys
 from pathlib import Path
 
+from wiki_daemon import lint as lintmod
 from wiki_daemon.config import Config
 from wiki_daemon.importer import import_source
 from wiki_daemon.ops import apply_clarification, ingest, ingest_interactive, query
+from wiki_daemon.ops import lint_deep, lint_repair
 from wiki_daemon.review import list_items, write_answer
 from wiki_daemon.runtime import StatusFile, is_pid_alive
 from wiki_daemon.scaffold import init_vault
@@ -62,6 +64,15 @@ def build_parser() -> argparse.ArgumentParser:
     qry.add_argument("question", help="the question to answer from the wiki")
     qry.add_argument("--save", action="store_true",
                      help="also file the answer as a wiki/queries/ page")
+
+    lnt = sub.add_parser("lint", parents=[common],
+                         help="health-check the wiki (--deep LLM scan, --fix repair)")
+    lnt.add_argument("--deep", action="store_true",
+                     help="also run an LLM semantic scan (contradictions, stale claims)")
+    lnt.add_argument("--fix", action="store_true",
+                     help="repair findings (deletes conflict-dupes + LLM repair pass)")
+    lnt.add_argument("--yes", action="store_true",
+                     help="skip the confirmation prompt for --fix")
     return p
 
 
@@ -183,6 +194,20 @@ def cmd_status(cfg: Config) -> int:
     return 0
 
 
+def _render_findings(findings, deep_report: str) -> str:
+    lines: list[str] = []
+    if not findings:
+        lines.append("wiki is clean — no mechanical findings")
+    else:
+        for f in findings:
+            lines.append(f"[{f.severity}] {f.check}  {f.path} — {f.message}")
+        fixable = sum(1 for f in findings if f.fixable)
+        lines.append(f"\n{len(findings)} findings ({fixable} fixable)")
+    if deep_report:
+        lines.append("\nSemantic findings (LLM):\n" + deep_report)
+    return "\n".join(lines)
+
+
 def _render_review(cfg: Config) -> str:
     items = list_items(cfg)
     if not items:
@@ -210,6 +235,55 @@ def cmd_review_answer(cfg: Config, item_id: str, text: str) -> int:
         return 0
     print(f"apply failed: {result.reason}", file=sys.stderr)
     return 1
+
+
+def cmd_lint(cfg: Config, *, deep: bool = False, fix: bool = False,
+             yes: bool = False) -> int:
+    findings = lintmod.run_checks(cfg)
+    deep_report = ""
+    if deep:
+        scan = lint_deep(cfg)
+        if scan.ok:
+            deep_report = scan.report
+        else:
+            print(f"lint deep failed: {scan.reason}", file=sys.stderr)
+    print(_render_findings(findings, deep_report))
+
+    if not fix:
+        return 1 if findings else 0
+
+    deletions = [f for f in findings if f.fix_action == "delete_file"]
+    needs_repair = any(not f.fixable for f in findings) or bool(deep_report)
+    if not deletions and not needs_repair:
+        return 0  # nothing to fix
+
+    # Confirm before mutating the LLM-owned wiki.
+    if not yes:
+        if not sys.stdin.isatty():
+            print("refusing to --fix without confirmation; re-run with --yes",
+                  file=sys.stderr)
+            return 2
+        plan = (f"will delete {len(deletions)} conflict-duplicate file(s)"
+                + (" and run an LLM repair pass" if needs_repair else ""))
+        if input(f"{plan}. Proceed? [type 'yes'] ").strip() != "yes":
+            print("aborted")
+            return 0
+
+    for f in deletions:
+        (cfg.vault / f.path).unlink(missing_ok=True)
+        print(f"deleted {f.path}")
+
+    if needs_repair:
+        repairable = [f for f in findings if not f.fixable]
+        text = "\n".join(f"- [{f.check}] {f.path}: {f.message}" for f in repairable)
+        result = lint_repair(cfg, text, deep_report=deep_report)
+        if not result.ok:
+            print(f"repair failed: {result.reason}", file=sys.stderr)
+            return 1
+
+    remaining = lintmod.run_checks(cfg)
+    print(_render_findings(remaining, ""))
+    return 1 if remaining else 0
 
 
 def cmd_query(cfg: Config, question: str, *, save: bool = False) -> int:
@@ -251,6 +325,8 @@ def main(argv=None) -> int:
         return cmd_review_list(cfg)
     if ns.command == "query":
         return cmd_query(cfg, ns.question, save=ns.save)
+    if ns.command == "lint":
+        return cmd_lint(cfg, deep=ns.deep, fix=ns.fix, yes=ns.yes)
     return 2
 
 
