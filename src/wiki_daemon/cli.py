@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
+from wiki_daemon import __version__
 from wiki_daemon import lint as lintmod
 from wiki_daemon.config import Config
 from wiki_daemon.importer import import_source
@@ -28,13 +30,17 @@ def _add_interactive_flags(parser: argparse.ArgumentParser) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="wiki")
-    sub = p.add_subparsers(dest="command", required=True)
+    p.add_argument("--version", action="version", version=f"wiki {__version__}")
+    sub = p.add_subparsers(dest="command")
 
     # --vault is shared by every subcommand (e.g. `wiki init --vault <path>`).
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--vault", help="path to the vault", default=None)
 
-    sub.add_parser("init", parents=[common], help="scaffold a new vault")
+    ini = sub.add_parser("init", parents=[common],
+                         help="scaffold a new vault (defaults to the current dir)")
+    ini.add_argument("--set-default", action="store_true",
+                     help="record this vault as the default in ~/.config/wiki/config.toml")
     ing = sub.add_parser("ingest", parents=[common], help="ingest one source file")
     ing.add_argument("file", help="path to a raw source .md")
     _add_interactive_flags(ing)
@@ -76,16 +82,33 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _config_path() -> Path:
+    base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+    return Path(base) / "wiki" / "config.toml"
+
+
 def _config(ns) -> Config:
-    if not ns.vault:
-        print("error: --vault is required", file=sys.stderr)
+    # `init` CREATES a vault — target an explicit path or the current directory.
+    if ns.command == "init":
+        return Config(vault=Path(ns.vault) if ns.vault else Path.cwd())
+    # every other command DISCOVERS an existing vault via the resolution chain.
+    from wiki_daemon.vault import VaultNotFound, resolve_vault
+    try:
+        vault = resolve_vault(ns.vault, env=os.environ.get("WIKI_VAULT"),
+                              start_dir=Path.cwd(), config_path=_config_path())
+    except VaultNotFound as exc:
+        print(f"error: {exc}", file=sys.stderr)
         raise SystemExit(2)
-    return Config(vault=Path(ns.vault))
+    return Config(vault=vault)
 
 
-def cmd_init(cfg: Config) -> int:
+def cmd_init(cfg: Config, *, set_default: bool = False) -> int:
     init_vault(cfg)
     print(f"initialized vault at {cfg.vault}")
+    if set_default:
+        from wiki_daemon.vault import write_config_vault
+        write_config_vault(_config_path(), cfg.vault)
+        print(f"set default vault → {cfg.vault}")
     return 0
 
 
@@ -302,10 +325,14 @@ def cmd_query(cfg: Config, question: str, *, save: bool = False) -> int:
 
 
 def main(argv=None) -> int:
-    ns = build_parser().parse_args(argv)
+    parser = build_parser()
+    ns = parser.parse_args(argv)
+    if ns.command is None:
+        parser.print_help()
+        return 0
     cfg = _config(ns)
     if ns.command == "init":
-        return cmd_init(cfg)
+        return cmd_init(cfg, set_default=ns.set_default)
     if ns.command == "ingest":
         return cmd_ingest(cfg, ns.file, interactive=ns.interactive)
     if ns.command == "import":

@@ -471,3 +471,83 @@ def test_cmd_lint_fix_repair_failure_returns_1(tmp_path, monkeypatch, capsys):
 
     rc = cmd_lint(cfg, deep=False, fix=True, yes=True)
     assert rc == 1 and "repair failed" in capsys.readouterr().err.lower()
+
+
+import pytest
+from wiki_daemon.cli import main
+
+
+def test_version_flag(capsys):
+    with pytest.raises(SystemExit) as e:
+        main(["--version"])
+    assert e.value.code == 0
+    assert "0.1.0" in capsys.readouterr().out
+
+
+def test_bare_wiki_prints_help(capsys):
+    rc = main([])
+    assert rc == 0
+    out = capsys.readouterr().out.lower()
+    assert "usage" in out and "ingest" in out
+
+
+def test_command_resolves_vault_from_cwd(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))  # keep daemon state off real home
+    cfg0 = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    init_vault(cfg0)
+    monkeypatch.setattr("pathlib.Path.cwd", lambda: cfg0.vault / "wiki")
+    monkeypatch.delenv("WIKI_VAULT", raising=False)
+    monkeypatch.setattr("wiki_daemon.cli._config_path",
+                        lambda: tmp_path / "noconfig.toml")
+    rc = main(["status"])
+    assert rc == 0
+    assert "processed:" in capsys.readouterr().out
+
+
+def test_command_no_vault_anywhere_exits_2(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr("pathlib.Path.cwd", lambda: tmp_path / "empty")
+    monkeypatch.delenv("WIKI_VAULT", raising=False)
+    monkeypatch.setattr("wiki_daemon.cli._config_path",
+                        lambda: tmp_path / "noconfig.toml")
+    with pytest.raises(SystemExit) as e:
+        main(["status"])
+    assert e.value.code == 2
+    assert "no vault found" in capsys.readouterr().err.lower()
+
+
+def test_explicit_vault_still_works(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    cfg0 = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    init_vault(cfg0)
+    rc = main(["status", "--vault", str(cfg0.vault)])
+    assert rc == 0
+
+
+def test_init_scaffolds_cwd_without_vault(tmp_path, monkeypatch, capsys):
+    target = tmp_path / "newvault"
+    target.mkdir()
+    monkeypatch.setattr("pathlib.Path.cwd", lambda: target)
+    rc = main(["init"])
+    assert rc == 0
+    assert (target / "CLAUDE.md").exists() and (target / "wiki").is_dir()
+
+
+def test_init_set_default_writes_config(tmp_path, monkeypatch, capsys):
+    target = tmp_path / "v"
+    cfg_path = tmp_path / "cfg" / "config.toml"
+    monkeypatch.setattr("wiki_daemon.cli._config_path", lambda: cfg_path)
+    rc = main(["init", "--vault", str(target), "--set-default"])
+    assert rc == 0
+    from wiki_daemon.vault import read_config_vault
+    assert read_config_vault(cfg_path) == target.resolve()
+    out = capsys.readouterr().out.lower()
+    assert "default vault" in out
+
+
+def test_init_parser_has_set_default():
+    parser = build_parser()
+    ns = parser.parse_args(["init", "--vault", "/v", "--set-default"])
+    assert ns.set_default is True
+    ns2 = parser.parse_args(["init", "--vault", "/v"])
+    assert ns2.set_default is False
