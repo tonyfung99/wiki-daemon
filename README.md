@@ -163,9 +163,46 @@ change how your wiki is built.
   adds an LLM scan for contradictions/stale claims; `--fix` deletes conflict-dupes
   and runs an LLM repair pass (always confirmed) to resolve the rest.
 
+## Hermes Agent Integration
+
+If you drive your Mac with a [Hermes agent](https://hermes-agent.nousresearch.com),
+this repo ships a skill at [`skills/wiki/`](skills/wiki/SKILL.md) so the agent can
+operate the wiki naturally ("clip this", "what do my notes say about X?", "is the
+daemon healthy?"). It wraps the same `wiki` CLI documented above.
+
+Register the in-repo skill directory and your vault path in `~/.hermes/config.yaml`
+(the skill stays in sync with the code — no copy to drift, just `git pull`):
+
+```yaml
+skills:
+  external_dirs:
+    - ~/workspace/wiki-daemon/skills    # your clone path
+  config:
+    wiki:
+      vault_path: "/path/to/your/vault"
+```
+
+Or set the vault from the CLI:
+
+```bash
+hermes config set skills.config.wiki.vault_path "/path/to/your/vault"
+```
+
+Then invoke it from any Hermes interface (Telegram, CLI, …):
+
+```
+/wiki import ~/Downloads/some-article.md
+/wiki query "What do my sources say about ERC-4337?"
+/wiki status
+```
+
+On first use the skill records your vault as the `wiki` default
+(`wiki init --set-default`), after which it runs commands without `--vault`.
+
 ## Docs
 
 - **Design / rationale:** [`docs/design.md`](docs/design.md)
+- **Hermes skill design:** [`docs/specs/2026-06-05-hermes-wiki-skill-design.md`](docs/specs/2026-06-05-hermes-wiki-skill-design.md)
 - **Implementation plan (M1+M2):** [`docs/plans/2026-05-31-ingest.md`](docs/plans/2026-05-31-ingest.md)
 - **Host validation runbook:** [`docs/RUNBOOK-intel-host-validation.md`](docs/RUNBOOK-intel-host-validation.md)
 
