@@ -128,7 +128,7 @@ export WIKI_VAULT="$VAULT"        # or set it once in your shell profile
 | `wiki lint --vault <path> [--deep] [--fix] [--yes]` | Health-check the wiki: dead links, iCloud conflict-dupes, orphans, index/log integrity. `--deep` adds an LLM semantic scan; `--fix` repairs (confirmed). |
 | `wiki status --vault <path>` | Show daemon health: running?, auth state, queue depth, processed count, open clarifications, last error. |
 | `wiki review --vault <path>` | List open ingest clarifications. `wiki review answer <id> "…"` records your answer and applies it. |
-| `wiki doctor --vault <path> [--probe <file>]` | Validate environment, tooling, and iCloud handling on the host. |
+| `wiki doctor --vault <path> [--probe <file>] [--fix] [--yes]` | Validate environment, tooling, and iCloud handling on the host. Also flags a stale vault `CLAUDE.md` (missing maintainer sections); `--fix` repairs it by appending the missing sections (`--yes` skips the prompt). |
 | `wiki serve --vault <path> [--reconcile-interval N]` | Run the daemon: watch `raw/sources/` and ingest autonomously. |
 
 The vault's `CLAUDE.md` is the **maintainer brain** — it defines the page
@@ -148,7 +148,10 @@ change how your wiki is built.
 - **Observability** = the daemon logs to stdout and a rotating `daemon.log` in
   its state dir; `wiki status` surfaces health; `wiki doctor` verifies `claude`
   is authenticated (headless `claude -p` needs its own valid login — use
-  `claude setup-token` for an unattended daemon).
+  `claude setup-token` for an unattended daemon) and flags a stale vault
+  `CLAUDE.md` whose maintainer sections lag the current template
+  (`wiki doctor --fix` appends the missing ones, since `wiki init` never
+  overwrites an existing brain).
 - **Clarifications** = when a structural decision is ambiguous, an interactive
   ingest asks you live; otherwise (scripts, the daemon) the maintainer files an
   open question under `wiki/review/`. Resolve later with `wiki review` and

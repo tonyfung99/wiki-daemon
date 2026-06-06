@@ -53,6 +53,10 @@ def build_parser() -> argparse.ArgumentParser:
                          help="validate iCloud + tooling on the daemon host")
     doc.add_argument("--probe", default=None,
                      help="path to an already-evicted file to test materialization")
+    doc.add_argument("--fix", action="store_true",
+                     help="repair a stale vault CLAUDE.md (append missing sections)")
+    doc.add_argument("--yes", action="store_true",
+                     help="skip the confirmation prompt for --fix")
     srv = sub.add_parser("serve", parents=[common],
                          help="run the daemon: watch raw/sources and ingest autonomously")
     srv.add_argument("--reconcile-interval", type=float, default=300.0)
@@ -340,8 +344,9 @@ def main(argv=None) -> int:
     if ns.command == "status":
         return cmd_status(cfg)
     if ns.command == "doctor":
-        from wiki_daemon.doctor import run_doctor
-        return run_doctor(cfg, probe=Path(ns.probe) if ns.probe else None)
+        from wiki_daemon import doctor
+        return doctor.run_doctor(cfg, probe=Path(ns.probe) if ns.probe else None,
+                                 fix=ns.fix, yes=ns.yes)
     if ns.command == "serve":
         # Lazy import: keeps watchdog/FSEvents out of the manual commands.
         from wiki_daemon.daemon import serve

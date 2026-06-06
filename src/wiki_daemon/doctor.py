@@ -7,9 +7,11 @@ evicted manually in Finder (`--probe <path>`).
 """
 from __future__ import annotations
 
+import os
 import platform
 import shutil
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +19,7 @@ from pathlib import Path
 from wiki_daemon.config import Config
 from wiki_daemon.health import probe_auth
 from wiki_daemon.icloud import ensure_materialized, is_dataless
+from wiki_daemon.maintainer import apply_upgrade, missing_sections
 
 _ICLOUD_MARKER = "Mobile Documents/com~apple~CloudDocs"
 
@@ -135,7 +138,48 @@ def probe_existing(path: Path) -> Check:
                  else "detected dataless but could NOT materialize")
 
 
-def run_doctor(cfg: Config, *, probe: Path | None = None, run=_run) -> int:
+def check_claude_md(cfg: Config) -> Check | None:
+    """WARN if the vault's CLAUDE.md is missing canonical template sections.
+    Returns None when the file is absent (already covered by vault:scaffolded)."""
+    if not cfg.claude_md.exists():
+        return None
+    missing = missing_sections(cfg.claude_md.read_text(encoding="utf-8"))
+    if not missing:
+        return Check("vault:claude-md", "PASS", "up to date")
+    names = ", ".join(s.header.removeprefix("## ") for s in missing)
+    return Check("vault:claude-md", "WARN",
+                 f"stale CLAUDE.md: missing {len(missing)} section(s) "
+                 f"({names}) — run `wiki doctor --fix`")
+
+
+def _fix_claude_md(cfg: Config, checks: list[Check], *, yes: bool) -> int | None:
+    """Repair a stale CLAUDE.md by appending missing sections. Returns an exit
+    code to force (2 = refused without confirmation), or None to fall through."""
+    cmd = next((c for c in checks if c.name == "vault:claude-md"), None)
+    if cmd is None or cmd.status != "WARN":
+        return None
+    new_text, added = apply_upgrade(cfg.claude_md.read_text(encoding="utf-8"))
+    if not added:
+        return None
+    if not yes:
+        if not sys.stdin.isatty():
+            print("refusing to --fix without confirmation; re-run with --yes",
+                  file=sys.stderr)
+            return 2
+        plan = f"will append {len(added)} CLAUDE.md section(s)"
+        if input(f"{plan}. Proceed? [type 'yes'] ").strip() != "yes":
+            print("aborted")
+            return None
+    tmp = cfg.claude_md.with_suffix(cfg.claude_md.suffix + ".tmp")
+    tmp.write_text(new_text, encoding="utf-8")
+    os.replace(tmp, cfg.claude_md)
+    names = ", ".join(h.removeprefix("## ") for h in added)
+    print(f"fixed: appended {len(added)} section(s) ({names})")
+    return None
+
+
+def run_doctor(cfg: Config, *, probe: Path | None = None, fix: bool = False,
+               yes: bool = False, run=_run) -> int:
     checks: list[Check] = [check_environment()]
     checks += check_tooling()
     if cfg.vault.exists():
@@ -143,6 +187,9 @@ def run_doctor(cfg: Config, *, probe: Path | None = None, run=_run) -> int:
     checks += check_vault(cfg)
     if cfg.vault.exists():
         checks.append(check_pinned(cfg, run))
+        cmd = check_claude_md(cfg)
+        if cmd is not None:
+            checks.append(cmd)
     if probe is not None:
         checks.append(probe_existing(probe))
     elif cfg.vault.exists() and cfg.claude_md.exists():
@@ -153,6 +200,10 @@ def run_doctor(cfg: Config, *, probe: Path | None = None, run=_run) -> int:
         finally:
             tmp.unlink(missing_ok=True)
     _print(checks)
+    if fix:
+        override = _fix_claude_md(cfg, checks, yes=yes)
+        if override is not None:
+            return override
     return 0 if overall_status(checks) != "FAIL" else 1
 
 

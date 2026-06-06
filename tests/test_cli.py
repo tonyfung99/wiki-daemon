@@ -551,3 +551,24 @@ def test_init_parser_has_set_default():
     assert ns.set_default is True
     ns2 = parser.parse_args(["init", "--vault", "/v"])
     assert ns2.set_default is False
+
+
+# --- doctor --fix wiring ---
+def test_doctor_parser_has_fix_yes():
+    p = build_parser()
+    ns = p.parse_args(["doctor", "--vault", "/v"])
+    assert ns.fix is False and ns.yes is False
+    ns2 = p.parse_args(["doctor", "--vault", "/v", "--fix", "--yes"])
+    assert ns2.fix is True and ns2.yes is True
+
+
+def test_main_doctor_passes_fix_yes(monkeypatch, tmp_path):
+    import wiki_daemon.doctor as doctor
+    from wiki_daemon.cli import main
+    seen = {}
+    def fake_run_doctor(cfg, *, probe, fix, yes, **kw):
+        seen.update(probe=probe, fix=fix, yes=yes)
+        return 0
+    monkeypatch.setattr(doctor, "run_doctor", fake_run_doctor)
+    rc = main(["doctor", "--vault", str(tmp_path), "--fix", "--yes"])
+    assert rc == 0 and seen["fix"] is True and seen["yes"] is True
