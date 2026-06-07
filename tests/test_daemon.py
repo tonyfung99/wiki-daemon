@@ -106,3 +106,59 @@ def test_drain_records_success_in_status(tmp_path):
                      status=status)
     assert res.ingested == 1 and res.transient_kind is None
     assert "last_success" in status.read()
+
+
+# --- lifecycle logging (2026-06-08) ---
+import logging
+
+
+def _fake_ok(config, path):
+    class R:
+        ok = True; skipped = False; reason = ""; kind = "ok"
+    return R()
+
+
+def test_drain_logs_ingesting_before_ingested(tmp_path, caplog):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    cfg.raw_sources.mkdir(parents=True)
+    q = JobQueue(cfg.queue_dir)
+    q.enqueue(Job(type="ingest", payload=str(cfg.raw_sources / "a.md")))
+    with caplog.at_level(logging.INFO, logger="wiki_daemon"):
+        drain_once(cfg, q, ingest_fn=_fake_ok, prepare_fn=lambda p: True)
+    msgs = [r.getMessage() for r in caplog.records]
+    start = next(i for i, m in enumerate(msgs) if m.startswith("ingesting "))
+    done = next(i for i, m in enumerate(msgs) if m.startswith("ingested "))
+    assert start < done  # start bracket precedes the terminal line
+
+
+def test_drain_logs_deferred_when_not_ready(tmp_path, caplog):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    cfg.raw_sources.mkdir(parents=True)
+    q = JobQueue(cfg.queue_dir)
+    q.enqueue(Job(type="ingest", payload=str(cfg.raw_sources / "a.md")))
+    with caplog.at_level(logging.INFO, logger="wiki_daemon"):
+        drain_once(cfg, q, ingest_fn=_fake_ok, prepare_fn=lambda p: False)
+    msgs = [r.getMessage() for r in caplog.records]
+    assert any("deferred" in m and "not materialized" in m for m in msgs)
+    assert not any(m.startswith("ingesting ") for m in msgs)
+
+
+def test_enqueue_reconcile_logs_count_when_nonzero(tmp_path, caplog):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    cfg.raw_sources.mkdir(parents=True)
+    (cfg.raw_sources / "a.md").write_text("aaa")
+    q = JobQueue(cfg.queue_dir)
+    store = StateStore(cfg.processed_json)
+    with caplog.at_level(logging.INFO, logger="wiki_daemon"):
+        enqueue_reconcile(cfg, q, store)
+    assert any("reconcile: enqueued 1" in r.getMessage() for r in caplog.records)
+
+
+def test_enqueue_reconcile_silent_when_zero(tmp_path, caplog):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    cfg.raw_sources.mkdir(parents=True)  # no files
+    q = JobQueue(cfg.queue_dir)
+    store = StateStore(cfg.processed_json)
+    with caplog.at_level(logging.INFO, logger="wiki_daemon"):
+        enqueue_reconcile(cfg, q, store)
+    assert not any("reconcile:" in r.getMessage() for r in caplog.records)

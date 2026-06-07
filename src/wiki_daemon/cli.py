@@ -67,6 +67,8 @@ def build_parser() -> argparse.ArgumentParser:
     srv = sub.add_parser("serve", parents=[common],
                          help="run the daemon: watch raw/sources and ingest autonomously")
     srv.add_argument("--reconcile-interval", type=float, default=300.0)
+    srv.add_argument("--verbose", "-v", action="store_true",
+                     help="log per-file watcher events (DEBUG)")
 
     rev = sub.add_parser("review", parents=[common],
                          help="list/accept/answer ingest clarifications")
@@ -448,8 +450,9 @@ def main(argv=None) -> int:
                                  fix=ns.fix, yes=ns.yes)
     if ns.command == "serve":
         # Lazy import: keeps watchdog/FSEvents out of the manual commands.
-        from wiki_daemon.daemon import serve
-        return serve(cfg, reconcile_interval=ns.reconcile_interval)
+        from wiki_daemon import daemon
+        return daemon.serve(cfg, reconcile_interval=ns.reconcile_interval,
+                            verbose=ns.verbose)
     if ns.command == "review":
         if ns.review_cmd == "accept":
             return cmd_review_accept(cfg, ns.id)

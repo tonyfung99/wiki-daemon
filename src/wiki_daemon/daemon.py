@@ -48,6 +48,8 @@ def enqueue_reconcile(cfg: Config, q: JobQueue, store: StateStore) -> int:
     for p in files_to_ingest(cfg, store):
         q.enqueue(Job(type="ingest", payload=str(p)))
         n += 1
+    if n:
+        _log.info("reconcile: enqueued %d file(s)", n)
     return n
 
 
@@ -67,6 +69,7 @@ def drain_once(cfg: Config, q: JobQueue, *, ingest_fn=None,
         if prepare_fn(Path(job.payload)):
             if status is not None:
                 status.update(last_attempt=now_iso())
+            _log.info("ingesting %s", job.payload)
             r = run(cfg, job.payload)
             kind = getattr(r, "kind", "") or ("ok" if r.ok else "claude_error")
             if r.ok and not r.skipped:
@@ -84,6 +87,8 @@ def drain_once(cfg: Config, q: JobQueue, *, ingest_fn=None,
                                               "file": job.payload, "at": now_iso()})
                 if kind in ("auth", "unavailable"):
                     result.transient_kind = kind
+        else:
+            _log.info("deferred %s (not materialized/stable yet)", job.payload)
         q.complete(job)
     return result
 
@@ -96,6 +101,7 @@ class _Handler(FileSystemEventHandler):
     def _maybe(self, path_str: str) -> None:
         p = Path(path_str)
         if is_relevant(self._cfg, p):
+            _log.debug("detected %s", p)
             self._q.enqueue(Job(type="ingest", payload=str(p)))
 
     def on_created(self, event):
@@ -146,8 +152,9 @@ def _preflight_auth(
     return True
 
 
-def serve(cfg: Config, *, reconcile_interval: float = 300.0, tick: float = 2.0) -> int:
-    configure_logging(cfg)
+def serve(cfg: Config, *, reconcile_interval: float = 300.0, tick: float = 2.0,
+          verbose: bool = False) -> int:
+    configure_logging(cfg, level=logging.DEBUG if verbose else logging.INFO)
     if not _preflight_auth(cfg):
         return 2
     cfg.state_dir.mkdir(parents=True, exist_ok=True)
@@ -162,6 +169,7 @@ def serve(cfg: Config, *, reconcile_interval: float = 300.0, tick: float = 2.0) 
     observer = Observer()
     observer.schedule(_Handler(cfg, q), str(cfg.raw_sources), recursive=False)
     observer.start()
+    _log.info("watching %s (reconcile every %ss)", cfg.raw_sources, reconcile_interval)
     last_reconcile = time.monotonic()
     consecutive = 0
     backoff_until = 0.0

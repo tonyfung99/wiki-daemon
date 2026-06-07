@@ -160,7 +160,7 @@ def test_main_serve_dispatches_to_daemon(monkeypatch, tmp_path):
 
     called = {}
 
-    def fake_serve(cfg, *, reconcile_interval):
+    def fake_serve(cfg, *, reconcile_interval, verbose=False):
         called["ri"] = reconcile_interval
         return 0
 
@@ -785,3 +785,23 @@ def test_defer_message_prints_track_and_review_paths(tmp_path, monkeypatch, caps
     assert rc == 0
     assert "track:" in out and "wiki status --source raw/sources/" in out
     assert "review:" in out and "wiki review --source raw/sources/" in out
+
+
+# --- serve --verbose (2026-06-08) ---
+def test_serve_parser_has_verbose():
+    p = build_parser()
+    assert p.parse_args(["serve", "--vault", "/v"]).verbose is False
+    assert p.parse_args(["serve", "--vault", "/v", "--verbose"]).verbose is True
+    assert p.parse_args(["serve", "--vault", "/v", "-v"]).verbose is True
+
+
+def test_main_serve_passes_verbose(monkeypatch, tmp_path):
+    import wiki_daemon.daemon as daemon
+    from wiki_daemon.cli import main
+    seen = {}
+    def fake_serve(cfg, *, reconcile_interval, verbose):
+        seen["verbose"] = verbose
+        return 0
+    monkeypatch.setattr(daemon, "serve", fake_serve)
+    rc = main(["serve", "--vault", str(tmp_path), "--verbose"])
+    assert rc == 0 and seen["verbose"] is True
