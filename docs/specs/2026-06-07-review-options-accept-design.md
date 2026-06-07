@@ -31,6 +31,10 @@ call) only when you override:
 - Picking an option or writing custom text runs the existing apply pass.
 - One source may raise multiple independent questions; the listing groups them
   by source.
+- **Interactive ingest gets the same option shape.** When a human runs
+  `wiki ingest` in a terminal, the live "ASK" presents the same numbered
+  options + recommended default (and accepts a number or free text) instead of
+  free-form prose — a prompt/template change only, no new protocol.
 
 ## Decisions
 
@@ -55,7 +59,11 @@ call) only when you override:
 ## Non-goals (YAGNI)
 
 - No interactive TUI / arrow-key picker — answers stay scriptable
-  (number/flag args), agent-friendly.
+  (number/flag args), agent-friendly. (Interactive ingest's numbered ask is
+  Claude-rendered text over stdio, not a CLI picker.)
+- No resumable "sync structured ingest" handshake for agents (model B). The
+  review queue is the agent's interactive surface; interactive ingest's option
+  parity is for humans at a terminal only.
 - No bulk accept (`wiki review accept --source <file>` / `--all`) yet. The
   per-source grouping is designed so this is an easy fast-follow.
 - Ingest autonomy is unchanged — it still applies the tentative and completes.
@@ -101,8 +109,33 @@ wiki review answer <id> "free text"  # custom override      → apply pass (LLM)
 - `accept` on an item with no `recommended`/`options` still works: it accepts the
   `tentative` (delete + log), since that is what was applied.
 
+## Interactive ingest parity (human terminal)
+
+The two ingest paths reuse one concept — "enumerate 2–4 options + a recommended
+default" — on two surfaces:
+
+| Path | Surface | Mechanism |
+|------|---------|-----------|
+| Headless (`--no-interactive`, agent/daemon) | review file `options:`/`recommended:` | RAISE CLARIFICATION template |
+| Interactive (`wiki ingest` in a TTY, human) | live numbered ask in the terminal | the ASK branch of the same template + interactive prompt |
+
+This is a **prompt/template change only — no code protocol**: interactive ingest
+is already Claude conversing over inherited stdio (`run_claude_interactive`), so
+we just instruct it that, when it asks live, it should present the candidate
+answers as a numbered list with a marked recommended default and accept either a
+number or free text. The agent path is unchanged (async via the review queue,
+model A); this only upgrades the human terminal experience from free prose to
+pickable options.
+
+Not in scope: a resumable "sync structured ingest" handshake for agents
+(model B) — the review queue is the agent's interactive surface.
+
 ## Code shape
 
+- `prompts.py` — `ingest_prompt(interactive=True)` gains an instruction: when a
+  decision is ambiguous, ASK with 2–4 **numbered options** and a marked
+  recommended default, and accept a number or free text. Headless branch
+  unchanged (still writes a review file per the template).
 - `review.py`
   - `ReviewItem` gains `options: list[str]` and `recommended: int | None`.
   - `_item_from_file` parses them (tolerant: missing → `[]` / `None`).
@@ -125,10 +158,14 @@ wiki review answer <id> "free text"  # custom override      → apply pass (LLM)
 
 ## Vault template (`src/wiki_daemon/templates/CLAUDE.md`)
 
-Extend RAISE CLARIFICATION: when recording the review file, also write
-`options:` (2–4 concrete candidate answers, the applied one first) and
-`recommended:` (its 1-based index, matching `tentative`). Keep the existing
-"make a best-effort choice and proceed" autonomy.
+Extend RAISE CLARIFICATION on both branches:
+- **Headless branch** (write a review file): also write `options:` (2–4 concrete
+  candidate answers, the applied one first) and `recommended:` (its 1-based
+  index, matching `tentative`). Keep the "make a best-effort choice and proceed"
+  autonomy.
+- **Interactive branch** (ASK the user live): present the same 2–4 candidate
+  answers as a **numbered list** with the recommended default marked, and accept
+  a number or free text before proceeding.
 
 > This is a template change. Existing vaults pick it up via
 > `wiki doctor --fix` only if the whole RAISE CLARIFICATION section is *missing*;
@@ -165,6 +202,9 @@ Pure-Python, no network / no `claude`:
     log path); `cmd_review_answer --pick N` feeds the right option text to a
     faked `apply_clarification`.
   - `_render_review` groups by source and marks the recommended option.
+- `tests/test_prompts.py` — `ingest_prompt(interactive=True)` instructs a
+  numbered-options ask with a recommended default; headless
+  `ingest_prompt(interactive=False)` still instructs the review-file path.
 - `tests/test_skill.py` — existing drift guard still passes (new subcommand
   `accept` is real).
 
