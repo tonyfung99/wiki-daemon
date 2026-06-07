@@ -15,7 +15,10 @@ def ingest_prompt(source_rel_path: str, *, interactive: bool = False) -> str:
         return base + (
             "\nThis is an INTERACTIVE session: if a structural decision is "
             "genuinely ambiguous, ASK me directly and wait for my answer before "
-            "proceeding — do not write a review file."
+            "proceeding — do not write a review file. When you ask, present 2–4 "
+            "concrete answer options as a NUMBERED list and mark the one you "
+            "recommend (the choice you would make by default). I will reply with "
+            "a number or with free text."
         )
     return base + (
         "\nYou are headless — never block. If a structural decision is genuinely "

@@ -67,15 +67,25 @@ Load this skill when the user wants to:
 Each block shows the common form. Run `wiki <command> --help` for the exact
 flags — that is always the source of truth.
 
-### Capture a source
+### Capture a source — then review immediately
+
+Ingest is a **two-step recipe**. Run the ingest, then IMMEDIATELY surface that
+material's clarifications while the user is still looking at what they sent —
+this is the best moment to walk through any open questions.
 
 ```bash
-# Import any file from disk (copies it into the vault, then ingests):
+# 1. Import any file from disk (copies it into the vault, then ingests):
 wiki import --no-interactive ~/Downloads/article.md
+# (or ingest a clip already in the vault: wiki ingest --no-interactive "raw/sources/<file>.md")
 
-# Or ingest a clip already sitting in the vault's raw/sources/:
-wiki ingest --no-interactive "raw/sources/2026-06-01-example.md"
+# 2. Right away, surface the clarifications THIS material raised:
+wiki review --source raw/sources/<the-landed-file>.md
 ```
+
+Ingest finishes instantly with the maintainer's best-guess choices already
+applied. Present any clarifications to the user in chat (see Review below) and
+resolve them in the conversation. The user is never blocked — if they ignore the
+questions, the best-guess choices stand.
 
 ### Query the wiki
 
@@ -87,10 +97,23 @@ wiki query --save "What do my sources say about X?"
 
 ### Review open clarifications
 
+The review queue is an **audit log of decisions the maintainer already made and
+applied** — not a list of blocking questions. Each item shows numbered options
+with a ★ recommended default. Usually you just `accept`.
+
 ```bash
-wiki review                                  # list open questions
-wiki review answer <id> "Your answer here"   # answer one and apply it
+wiki review                                  # list all open questions, grouped by source
+wiki review --source raw/sources/<file>.md   # only the questions from one material
+
+# Resolve (escalating cost):
+wiki review accept <id>                       # take the ★ default — instant, NO LLM
+wiki review answer <id> --pick 2              # choose option 2     — runs an LLM apply pass
+wiki review answer <id> "custom answer"       # free-text override  — runs an LLM apply pass
 ```
+
+Present each question's options to the user and let the conversation decide.
+Prefer `accept` for the common "that's fine" case — it's free and needs no auth.
+One material can raise several independent questions; resolve each by its `<id>`.
 
 ### Health check (lint)
 

@@ -79,3 +79,86 @@ def test_empty_answer_string_distinct_from_none(tmp_path):
     assert read_item(cfg, "calvin-vs-dark").answer == ""
     _seed(cfg, item_id="open-one")  # no answer key
     assert read_item(cfg, "open-one").answer is None
+
+
+# --- options / recommended / source filter / accept / pick (2026-06-07) ---
+from wiki_daemon.review import accept_item, option_to_answer
+
+
+def _seed_opts(cfg, item_id, source, *, options, recommended):
+    cfg.review.mkdir(parents=True, exist_ok=True)
+    lines = ["---", "type: review", "status: open", f"source: {source}",
+             'question: "Granularity?"', "options:"]
+    lines += [f'  - "{o}"' for o in options]
+    lines += [f"recommended: {recommended}",
+              f'tentative: "{options[recommended-1]}"', "created: 2026-06-07",
+              "---", "rationale", ""]
+    (cfg.review / f"{item_id}.md").write_text("\n".join(lines), encoding="utf-8")
+
+
+def test_item_parses_options_and_recommended(tmp_path):
+    cfg = _cfg(tmp_path)
+    _seed_opts(cfg, "g", "raw/sources/a.md", options=["Moderate", "Fine", "Coarse"],
+               recommended=1)
+    it = read_item(cfg, "g")
+    assert it.options == ["Moderate", "Fine", "Coarse"]
+    assert it.recommended == 1
+
+
+def test_item_without_options_is_backcompat(tmp_path):
+    cfg = _cfg(tmp_path)
+    _seed(cfg)  # legacy item, no options
+    it = read_item(cfg, "calvin-vs-dark")
+    assert it.options == []
+    assert it.recommended is None
+
+
+def test_list_items_source_filter(tmp_path):
+    cfg = _cfg(tmp_path)
+    _seed_opts(cfg, "a1", "raw/sources/a.md", options=["x", "y"], recommended=1)
+    _seed_opts(cfg, "b1", "raw/sources/b.md", options=["x", "y"], recommended=1)
+    only_a = list_items(cfg, source="raw/sources/a.md")
+    assert [it.id for it in only_a] == ["a1"]
+    assert len(list_items(cfg)) == 2  # None -> all
+
+
+def test_accept_item_deletes_and_logs_without_runner(tmp_path):
+    cfg = _cfg(tmp_path)
+    (cfg.wiki).mkdir(parents=True, exist_ok=True)
+    (cfg.wiki / "log.md").write_text("# Log\n", encoding="utf-8")
+    _seed_opts(cfg, "g", "raw/sources/a.md", options=["Moderate", "Fine"], recommended=1)
+    out = accept_item(cfg, "g")
+    assert out.id == "g"
+    assert not (cfg.review / "g.md").exists()              # removed
+    log = (cfg.wiki / "log.md").read_text(encoding="utf-8")
+    assert "review (accepted)" in log and "Granularity?" in log
+
+
+def test_accept_item_unknown_raises(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        accept_item(_cfg(tmp_path), "nope")
+
+
+def test_option_to_answer_resolves_index(tmp_path):
+    cfg = _cfg(tmp_path)
+    _seed_opts(cfg, "g", "raw/sources/a.md", options=["Moderate", "Fine", "Coarse"],
+               recommended=1)
+    it = read_item(cfg, "g")
+    assert option_to_answer(it, 2) == "Fine"
+
+
+def test_option_to_answer_out_of_range_raises(tmp_path):
+    cfg = _cfg(tmp_path)
+    _seed_opts(cfg, "g", "raw/sources/a.md", options=["Moderate", "Fine"], recommended=1)
+    it = read_item(cfg, "g")
+    with pytest.raises(ValueError):
+        option_to_answer(it, 3)
+    with pytest.raises(ValueError):
+        option_to_answer(it, 0)
+
+
+def test_option_to_answer_no_options_raises(tmp_path):
+    cfg = _cfg(tmp_path)
+    _seed(cfg)
+    with pytest.raises(ValueError):
+        option_to_answer(read_item(cfg, "calvin-vs-dark"), 1)

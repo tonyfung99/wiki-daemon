@@ -572,3 +572,87 @@ def test_main_doctor_passes_fix_yes(monkeypatch, tmp_path):
     monkeypatch.setattr(doctor, "run_doctor", fake_run_doctor)
     rc = main(["doctor", "--vault", str(tmp_path), "--fix", "--yes"])
     assert rc == 0 and seen["fix"] is True and seen["yes"] is True
+
+
+# --- review options/accept/--pick/--source (2026-06-07) ---
+from wiki_daemon.cli import cmd_review_accept
+
+
+def _seed_review_opts(cfg, item_id, source, options, recommended=1):
+    cfg.review.mkdir(parents=True, exist_ok=True)
+    lines = ["---", "type: review", "status: open", f"source: {source}",
+             'question: "Granularity?"', "options:"]
+    lines += [f'  - "{o}"' for o in options]
+    lines += [f"recommended: {recommended}", f'tentative: "{options[recommended-1]}"',
+              "created: 2026-06-07", "---", "body", ""]
+    (cfg.review / f"{item_id}.md").write_text("\n".join(lines), encoding="utf-8")
+
+
+def test_review_parser_source_and_accept_and_pick():
+    p = build_parser()
+    ns = p.parse_args(["review", "--vault", "/v", "--source", "raw/sources/a.md"])
+    assert ns.source == "raw/sources/a.md"
+    acc = p.parse_args(["review", "--vault", "/v", "accept", "id1"])
+    assert acc.review_cmd == "accept" and acc.id == "id1"
+    assert acc.vault == "/v"   # --vault before the subcommand must survive
+    pk = p.parse_args(["review", "--vault", "/v", "answer", "id1", "--pick", "2"])
+    assert pk.pick == 2 and pk.text is None
+    assert pk.vault == "/v"
+    tx = p.parse_args(["review", "--vault", "/v", "answer", "id1", "free text"])
+    assert tx.text == "free text" and tx.pick is None
+
+
+def test_render_review_groups_by_source_and_marks_recommended(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    _seed_review_opts(cfg, "a1", "raw/sources/a.md", ["Moderate", "Fine"], recommended=1)
+    _seed_review_opts(cfg, "b1", "raw/sources/b.md", ["Keep", "Split"], recommended=2)
+    out = _render_review(cfg)
+    assert "raw/sources/a.md" in out and "raw/sources/b.md" in out
+    assert "1) Moderate" in out and "2) Fine" in out
+    assert "★" in out  # recommended marked
+
+
+def test_render_review_source_filter(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    _seed_review_opts(cfg, "a1", "raw/sources/a.md", ["x", "y"])
+    _seed_review_opts(cfg, "b1", "raw/sources/b.md", ["x", "y"])
+    out = _render_review(cfg, source="raw/sources/a.md")
+    assert "a1" in out and "b1" not in out
+
+
+def test_cmd_review_accept_removes_and_no_apply(tmp_path, capsys, monkeypatch):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    init_vault(cfg)
+    _seed_review_opts(cfg, "g", "raw/sources/a.md", ["Moderate", "Fine"])
+    import wiki_daemon.cli as cli
+    called = {"apply": False}
+    monkeypatch.setattr(cli, "apply_clarification",
+                        lambda *a, **k: called.__setitem__("apply", True))
+    rc = cmd_review_accept(cfg, "g")
+    assert rc == 0 and called["apply"] is False     # accept never calls claude
+    assert not (cfg.review / "g.md").exists()
+    assert "accepted" in capsys.readouterr().out.lower()
+
+
+def test_cmd_review_answer_pick_feeds_option_text(tmp_path, capsys, monkeypatch):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    init_vault(cfg)
+    _seed_review_opts(cfg, "g", "raw/sources/a.md", ["Moderate", "Fine", "Coarse"])
+    import wiki_daemon.cli as cli
+    from wiki_daemon.ops import ApplyResult
+    seen = {}
+    def fake_apply(cfg, rid):
+        from wiki_daemon.review import read_item
+        seen["answer"] = read_item(cfg, rid).answer
+        return ApplyResult(ok=True)
+    monkeypatch.setattr(cli, "apply_clarification", fake_apply)
+    rc = cli.cmd_review_answer(cfg, "g", text=None, pick=2)
+    assert rc == 0 and seen["answer"] == "Fine"     # option 2 expanded
+
+
+def test_cmd_review_answer_pick_out_of_range(tmp_path, capsys):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    init_vault(cfg)
+    _seed_review_opts(cfg, "g", "raw/sources/a.md", ["Moderate", "Fine"])
+    rc = cmd_review_answer(cfg, "g", text=None, pick=5)
+    assert rc == 2 and "range" in capsys.readouterr().err.lower()

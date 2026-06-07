@@ -62,12 +62,21 @@ def build_parser() -> argparse.ArgumentParser:
     srv.add_argument("--reconcile-interval", type=float, default=300.0)
 
     rev = sub.add_parser("review", parents=[common],
-                         help="list/answer ingest clarifications")
+                         help="list/accept/answer ingest clarifications")
+    rev.add_argument("--source", default=None,
+                     help="list only items raised by this source (vault-relative path)")
     rev_sub = rev.add_subparsers(dest="review_cmd")
-    ans = rev_sub.add_parser("answer", parents=[common],
+    # NB: no parents=[common] here — the `review` parent already provides --vault;
+    # re-declaring it on the sub-subparser clobbers the parsed value back to None.
+    acc = rev_sub.add_parser("accept",
+                             help="accept the recommended default (no LLM; just resolves)")
+    acc.add_argument("id", help="review item id (filename without .md)")
+    ans = rev_sub.add_parser("answer",
                              help="answer a clarification and apply it")
     ans.add_argument("id", help="review item id (filename without .md)")
-    ans.add_argument("text", help="your answer")
+    ans.add_argument("text", nargs="?", default=None, help="your free-text answer")
+    ans.add_argument("--pick", type=int, default=None,
+                     help="choose option N (1-based) instead of free text")
 
     qry = sub.add_parser("query", parents=[common],
                          help="ask the wiki a question (read-only; --save files the answer)")
@@ -235,27 +244,62 @@ def _render_findings(findings, deep_report: str) -> str:
     return "\n".join(lines)
 
 
-def _render_review(cfg: Config) -> str:
-    items = list_items(cfg)
+def _render_review(cfg: Config, source: str | None = None) -> str:
+    items = list_items(cfg, source=source)
     if not items:
         return "no open clarifications"
-    lines = []
+    by_source: dict[str, list] = {}
     for it in items:
-        lines.append(f"{it.id}  [{it.status}]  {it.source}\n    {it.question}")
-    return "\n".join(lines)
+        by_source.setdefault(it.source, []).append(it)
+    lines: list[str] = []
+    for src, group in by_source.items():
+        lines.append(f"# {src}")
+        for it in group:
+            lines.append(f"  {it.id}  [{it.status}]\n    {it.question}")
+            for i, opt in enumerate(it.options, start=1):
+                star = " ★" if it.recommended == i else ""
+                lines.append(f"      {i}) {opt}{star}")
+        lines.append("")
+    return "\n".join(lines).rstrip()
 
 
-def cmd_review_list(cfg: Config) -> int:
-    print(_render_review(cfg))
+def cmd_review_list(cfg: Config, source: str | None = None) -> int:
+    print(_render_review(cfg, source=source))
     return 0
 
 
-def cmd_review_answer(cfg: Config, item_id: str, text: str) -> int:
+def cmd_review_accept(cfg: Config, item_id: str) -> int:
+    from wiki_daemon.review import accept_item
     try:
-        write_answer(cfg, item_id, text)
+        accept_item(cfg, item_id)
+    except FileNotFoundError as exc:
+        print(f"review accept failed: {exc}", file=sys.stderr)
+        return 1
+    print(f"accepted {item_id}")
+    return 0
+
+
+def cmd_review_answer(cfg: Config, item_id: str, text: str | None = None,
+                      *, pick: int | None = None) -> int:
+    from wiki_daemon.review import option_to_answer, read_item
+    try:
+        item = read_item(cfg, item_id)
     except FileNotFoundError as exc:
         print(f"review answer failed: {exc}", file=sys.stderr)
         return 1
+    if pick is not None:
+        try:
+            answer = option_to_answer(item, pick)
+        except ValueError as exc:
+            print(f"review answer failed: {exc}", file=sys.stderr)
+            return 2
+    elif text is not None:
+        answer = text
+    else:
+        print("review answer failed: provide an answer or --pick N", file=sys.stderr)
+        return 2
+
+    write_answer(cfg, item_id, answer)
     result = apply_clarification(cfg, item_id)
     if result.ok:
         print(f"resolved {item_id}")
@@ -352,9 +396,11 @@ def main(argv=None) -> int:
         from wiki_daemon.daemon import serve
         return serve(cfg, reconcile_interval=ns.reconcile_interval)
     if ns.command == "review":
+        if ns.review_cmd == "accept":
+            return cmd_review_accept(cfg, ns.id)
         if ns.review_cmd == "answer":
-            return cmd_review_answer(cfg, ns.id, ns.text)
-        return cmd_review_list(cfg)
+            return cmd_review_answer(cfg, ns.id, ns.text, pick=ns.pick)
+        return cmd_review_list(cfg, source=ns.source)
     if ns.command == "query":
         return cmd_query(cfg, ns.question, save=ns.save)
     if ns.command == "lint":

@@ -56,14 +56,23 @@ or missing context you cannot infer — do NOT stall:
    status: open
    source: raw/sources/<file>.md
    question: "<the specific question for the user>"
+   options:
+     - "<the best-effort choice you made — list this one first>"
+     - "<a concrete alternative>"
+     - "<another concrete alternative>"
+   recommended: 1
    tentative: "<the best-effort choice you made>"
    created: <YYYY-MM-DD>
    ---
    <optional context>
    ```
+   Provide 2–4 concrete `options:` (the applied choice first) and set
+   `recommended:` to its 1-based index, matching `tentative`. This lets the user
+   accept the default or pick an alternative without composing prose.
 Ingest still completes normally; the source is fully processed. If you are told
 this is an interactive session, ASK the user directly and wait instead of
-writing a review file.
+writing a review file — present the same 2–4 candidate answers as a NUMBERED
+list, mark the one you recommend, and accept a number or free text.
 
 ## APPLY CLARIFICATION
 Given one answered review file (`status: answered`, with an `answer:` field):
