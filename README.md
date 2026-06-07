@@ -26,7 +26,10 @@ wiki-daemon  ──watches raw/──▶  claude -p  ──writes──▶  wiki
 The daemon is the **single writer** of `wiki/`: it serializes ingest jobs,
 de-dupes by content hash, recovers from crashes, and handles iCloud "dataless"
 files. The `raw/` → `wiki/` boundary is a firewall (the watcher only watches
-`raw/`; `claude` only writes `wiki/`).
+`raw/`; `claude` only writes `wiki/`). To keep that invariant, when a daemon is
+running, a manual `wiki import`/`ingest` does **not** ingest in-process — it
+lands the file and queues it for the daemon (then check `wiki review`). Without a
+daemon, manual ingest takes a local lock so two commands can't double-write.
 
 ## Requirements
 

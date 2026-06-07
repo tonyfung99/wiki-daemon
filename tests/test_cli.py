@@ -656,3 +656,66 @@ def test_cmd_review_answer_pick_out_of_range(tmp_path, capsys):
     _seed_review_opts(cfg, "g", "raw/sources/a.md", ["Moderate", "Fine"])
     rc = cmd_review_answer(cfg, "g", text=None, pick=5)
     assert rc == 2 and "range" in capsys.readouterr().err.lower()
+
+
+# --- defer-to-daemon + vault ingest lock (2026-06-07) ---
+def test_cmd_import_defers_when_daemon_alive(tmp_path, monkeypatch, capsys):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    init_vault(cfg)
+    external = tmp_path / "outside.md"
+    external.write_text("clip\n", encoding="utf-8")
+    import wiki_daemon.cli as cli
+    monkeypatch.setattr(cli, "daemon_owns_vault", lambda cfg: True)
+    spy = {"ingest": False}
+    monkeypatch.setattr(cli, "ingest", lambda *a, **k: spy.__setitem__("ingest", True))
+
+    rc = cli.cmd_import(cfg, str(external), interactive=False)
+
+    assert rc == 0 and spy["ingest"] is False           # did NOT ingest in-process
+    assert list(cfg.raw_sources.glob("*-outside.md"))   # landed the file
+    assert list(cfg.queue_dir.glob("pending-*.json"))   # enqueued for daemon
+    assert "queued for the running daemon" in capsys.readouterr().out.lower()
+
+
+def test_cmd_ingest_defers_when_daemon_alive(tmp_path, monkeypatch, capsys):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    init_vault(cfg)
+    src = cfg.raw_sources / "a.md"
+    src.write_text("---\ntype: source\ntitle: A\n---\nbody\n", encoding="utf-8")
+    import wiki_daemon.cli as cli
+    monkeypatch.setattr(cli, "daemon_owns_vault", lambda cfg: True)
+    spy = {"ingest": False}
+    monkeypatch.setattr(cli, "ingest", lambda *a, **k: spy.__setitem__("ingest", True))
+
+    rc = cli.cmd_ingest(cfg, str(src), interactive=False)
+
+    assert rc == 0 and spy["ingest"] is False
+    assert list(cfg.queue_dir.glob("pending-*.json"))
+    assert "queued for the running daemon" in capsys.readouterr().out.lower()
+
+
+def test_cmd_ingest_interactive_defer_notes_headless(tmp_path, monkeypatch, capsys):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    init_vault(cfg)
+    src = cfg.raw_sources / "a.md"
+    src.write_text("---\ntype: source\ntitle: A\n---\nbody\n", encoding="utf-8")
+    import wiki_daemon.cli as cli
+    monkeypatch.setattr(cli, "daemon_owns_vault", lambda cfg: True)
+    # explicit --interactive -> prominent headless note
+    rc = cli.cmd_ingest(cfg, str(src), interactive=True)
+    out = capsys.readouterr().out.lower()
+    assert rc == 0 and "headless" in out and "wiki review" in out
+
+
+def test_cmd_ingest_lock_contention_returns_1(tmp_path, monkeypatch, capsys):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    init_vault(cfg)
+    src = cfg.raw_sources / "a.md"
+    src.write_text("---\ntype: source\ntitle: A\n---\nbody\n", encoding="utf-8")
+    import wiki_daemon.cli as cli
+    from wiki_daemon.runtime import vault_ingest_lock
+    monkeypatch.setattr(cli, "daemon_owns_vault", lambda cfg: False)
+    with vault_ingest_lock(cfg):                         # pre-hold the lock
+        rc = cli.cmd_ingest(cfg, str(src), interactive=False)
+    assert rc == 1
+    assert "another ingest is in progress" in capsys.readouterr().err.lower()

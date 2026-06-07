@@ -2,8 +2,10 @@
 """Daemon runtime status file (status.json) + small process helpers."""
 from __future__ import annotations
 
+import fcntl
 import json
 import os
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -28,6 +30,41 @@ def is_pid_alive(pid: int | None) -> bool:
     except PermissionError:
         return True
     return True
+
+
+def daemon_owns_vault(cfg) -> bool:
+    """True if a live daemon process is serving this vault — i.e. status.json
+    records a pid that is still alive. The daemon is the single writer of wiki/,
+    so manual import/ingest must defer to it rather than ingest in-process."""
+    pid = StatusFile(cfg.state_dir / "status.json").read().get("pid")
+    return is_pid_alive(pid)
+
+
+class IngestLockBusy(Exception):
+    """Raised when another process already holds the vault ingest lock."""
+
+
+@contextmanager
+def vault_ingest_lock(cfg):
+    """Non-blocking exclusive flock at state_dir/ingest.lock, serializing
+    in-process ingest on this host. Raises IngestLockBusy if another holder has
+    it. The kernel releases the lock on context exit or process death. The lock
+    lives in the local state dir (never the iCloud vault) so flock is reliable;
+    it does NOT coordinate across machines (see the contention design doc)."""
+    lock_path = cfg.state_dir / "ingest.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fh = open(lock_path, "w")
+    try:
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            raise IngestLockBusy(str(lock_path)) from exc
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+    finally:
+        fh.close()
 
 
 class StatusFile:

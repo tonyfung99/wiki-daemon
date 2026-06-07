@@ -87,6 +87,12 @@ applied. Present any clarifications to the user in chat (see Review below) and
 resolve them in the conversation. The user is never blocked — if they ignore the
 questions, the best-guess choices stand.
 
+**If a daemon is serving this vault** (`wiki status` shows `daemon: running`),
+`import`/`ingest` will not ingest in-process — they queue the file for the
+daemon and print "queued for the running daemon". That's expected. Don't re-run
+the command; just poll `wiki review --source <file>` (the daemon ingests
+headlessly within a few seconds) and surface the clarifications as usual.
+
 ### Query the wiki
 
 ```bash
