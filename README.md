@@ -132,7 +132,7 @@ export WIKI_VAULT="$VAULT"        # or set it once in your shell profile
 | `wiki status --vault <path> [--source <file>]` | Show daemon health: running?, auth state, queue depth, processed count, open clarifications, last error. With `--source`, report just that source's ingest state — `queued`/`ingesting`/`processed`/`failed`/`untracked` — and set an exit code (`0` processed, `1` failed, `2` untracked, `3` in progress) so an agent can poll until done. |
 | `wiki review --vault <path>` | List open ingest clarifications. `wiki review answer <id> "…"` records your answer and applies it. |
 | `wiki doctor --vault <path> [--probe <file>] [--fix] [--yes]` | Validate environment, tooling, and iCloud handling on the host. Also flags a stale vault `CLAUDE.md` (missing maintainer sections); `--fix` repairs it by appending the missing sections (`--yes` skips the prompt). |
-| `wiki serve --vault <path> [--reconcile-interval N]` | Run the daemon: watch `raw/sources/` and ingest autonomously. |
+| `wiki serve --vault <path> [--reconcile-interval N] [--verbose]` | Run the daemon: watch `raw/sources/` and ingest autonomously. Logs lifecycle events (startup, `ingesting`/`ingested` per file, deferred not-ready files, reconcile sweeps) to stdout + `daemon.log`; `--verbose` adds per-file watcher (`detected`) events at DEBUG. |
 
 The vault's `CLAUDE.md` is the **maintainer brain** — it defines the page
 templates, naming, and the ingest algorithm `claude -p` follows. Tune it to
