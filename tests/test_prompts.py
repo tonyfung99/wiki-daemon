@@ -21,6 +21,13 @@ def test_ingest_prompt_interactive_says_ask():
     assert "interactive" in p.lower()
 
 
+def test_ingest_prompt_interactive_asks_with_numbered_options():
+    p = ingest_prompt("raw/sources/x.md", interactive=True).lower()
+    assert "numbered" in p and "option" in p
+    assert "recommend" in p  # mark a recommended default
+    assert "number or" in p  # accept a number or free text
+
+
 def test_apply_clarification_prompt_names_file_and_op():
     p = apply_clarification_prompt("wiki/review/calvin.md")
     assert "wiki/review/calvin.md" in p
