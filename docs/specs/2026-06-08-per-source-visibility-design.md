@@ -142,7 +142,15 @@ Pure-Python, no network / no `claude`:
   - `_defer_to_daemon` message includes both `track:` and `review:` lines with
     the vault-relative path.
 
-## Risks
+## Future work (flagged, not in this spec)
+
+**Reliable per-source failure tracking.** `status.json` records only the *last*
+error globally, so `failed` is best-effort: a source whose error was overwritten
+by a later failure reads as `untracked` (or `queued` after reconcile). A proper
+fix records failures **per source** — e.g. a `failures` map in state, or a
+`failed-<id>.json` in the queue dir, so `source_state` can report `failed`
+durably with its reason and attempt count. Deferred to its own spec; this spec
+ships the other four states (which are durable) and a best-effort `failed`.
 
 - The queue scan reads JSON files each call; negligible at expected queue sizes.
 - Path normalization must match the payload form exactly (absolute, resolved);
