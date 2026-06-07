@@ -89,9 +89,23 @@ questions, the best-guess choices stand.
 
 **If a daemon is serving this vault** (`wiki status` shows `daemon: running`),
 `import`/`ingest` will not ingest in-process — they queue the file for the
-daemon and print "queued for the running daemon". That's expected. Don't re-run
-the command; just poll `wiki review --source <file>` (the daemon ingests
-headlessly within a few seconds) and surface the clarifications as usual.
+daemon and print "queued for the running daemon" plus the exact `track:` and
+`review:` commands (with the landed `raw/sources/<file>.md` path). That's
+expected — don't re-run the command. Poll until the daemon finishes, then review:
+
+```bash
+# poll the source's state until it leaves "in progress" (exit 3):
+while wiki status --source raw/sources/<file>.md; [ $? -eq 3 ]; do sleep 2; done
+#   prints: queued | ingesting | processed | failed | untracked
+#   exit:   3 in-progress · 0 processed · 1 failed · 2 untracked
+
+# then surface that material's clarifications:
+wiki review --source raw/sources/<file>.md
+```
+
+`wiki review --source` now disambiguates the empty case: "still processing
+(...)" vs "processed — no open clarifications" vs "ingest failed ..." — so an
+empty list no longer means "maybe still working".
 
 ### Query the wiki
 

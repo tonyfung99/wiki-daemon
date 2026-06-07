@@ -719,3 +719,69 @@ def test_cmd_ingest_lock_contention_returns_1(tmp_path, monkeypatch, capsys):
         rc = cli.cmd_ingest(cfg, str(src), interactive=False)
     assert rc == 1
     assert "another ingest is in progress" in capsys.readouterr().err.lower()
+
+
+# --- per-source visibility: status --source, review empty-state, defer msg (2026-06-08) ---
+from wiki_daemon.cli import cmd_status_source
+
+
+def test_status_parser_has_source():
+    ns = build_parser().parse_args(["status", "--vault", "/v", "--source", "raw/sources/a.md"])
+    assert ns.source == "raw/sources/a.md"
+
+
+def test_cmd_status_source_exit_codes(tmp_path, monkeypatch, capsys):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    import wiki_daemon.cli as cli
+    from wiki_daemon.progress import SourceState
+    cases = {"processed": 0, "failed": 1, "untracked": 2, "queued": 3, "ingesting": 3}
+    for state, code in cases.items():
+        monkeypatch.setattr(cli, "source_state",
+                            lambda cfg, s, _st=state: SourceState(_st, detail="d"))
+        rc = cmd_status_source(cfg, "raw/sources/a.md")
+        assert rc == code, f"{state} -> {rc} != {code}"
+        assert state in capsys.readouterr().out
+
+
+def test_main_status_source_routes(tmp_path, monkeypatch):
+    import wiki_daemon.cli as cli
+    seen = {}
+    def fake(cfg, src):
+        seen["src"] = src
+        return 0
+    monkeypatch.setattr(cli, "cmd_status_source", fake)
+    init_vault(Config(vault=tmp_path / "v", state_root=tmp_path / "s"))
+    rc = cli.main(["status", "--vault", str(tmp_path / "v"), "--source", "raw/sources/a.md"])
+    assert rc == 0 and seen["src"] == "raw/sources/a.md"
+
+
+def test_render_review_source_empty_states(tmp_path, monkeypatch):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    init_vault(cfg)
+    import wiki_daemon.cli as cli
+    from wiki_daemon.progress import SourceState
+    checks = {
+        "ingesting": "still processing",
+        "processed": "no open clarifications",
+        "failed": "ingest failed",
+        "untracked": "not found",
+    }
+    for state, expect in checks.items():
+        monkeypatch.setattr(cli, "source_state", lambda cfg, s, _st=state: SourceState(_st))
+        out = cli._render_review(cfg, source="raw/sources/a.md")
+        assert expect in out.lower(), f"{state}: {out!r}"
+
+
+def test_defer_message_prints_track_and_review_paths(tmp_path, monkeypatch, capsys):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    init_vault(cfg)
+    external = tmp_path / "outside.md"
+    external.write_text("clip\n", encoding="utf-8")
+    import wiki_daemon.cli as cli
+    monkeypatch.setattr(cli, "daemon_owns_vault", lambda cfg: True)
+    monkeypatch.setattr(cli, "ingest", lambda *a, **k: None)  # must not be called
+    rc = cli.cmd_import(cfg, str(external), interactive=False)
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "track:" in out and "wiki status --source raw/sources/" in out
+    assert "review:" in out and "wiki review --source raw/sources/" in out

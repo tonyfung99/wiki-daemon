@@ -13,6 +13,7 @@ from wiki_daemon.config import Config
 from wiki_daemon.importer import import_source
 from wiki_daemon.ops import apply_clarification, ingest, ingest_interactive, query
 from wiki_daemon.ops import lint_deep, lint_repair
+from wiki_daemon.progress import source_state
 from wiki_daemon.review import list_items, write_answer
 from wiki_daemon.queue import Job, JobQueue
 from wiki_daemon.runtime import (
@@ -51,7 +52,10 @@ def build_parser() -> argparse.ArgumentParser:
                          help="copy a file into the vault and ingest it")
     imp.add_argument("file", help="path to any UTF-8 text file to import")
     _add_interactive_flags(imp)
-    sub.add_parser("status", parents=[common], help="show processed count")
+    sts = sub.add_parser("status", parents=[common], help="show processed count")
+    sts.add_argument("--source", default=None,
+                     help="report one source's ingest state (queued/ingesting/"
+                          "processed/failed/untracked) and set an exit code")
     doc = sub.add_parser("doctor", parents=[common],
                          help="validate iCloud + tooling on the daemon host")
     doc.add_argument("--probe", default=None,
@@ -140,7 +144,10 @@ def _defer_to_daemon(cfg: Config, path: Path, interactive: bool | None) -> int:
     q = JobQueue(cfg.queue_dir)
     q.enqueue(Job(type="ingest", payload=str(path)))
     pending = len(list(cfg.queue_dir.glob("pending-*.json")))
+    rel = path.resolve().relative_to(cfg.vault).as_posix()
     print(f"queued for the running daemon ({pending} pending)")
+    print(f"  track:  wiki status --source {rel}")
+    print(f"  review: wiki review --source {rel}")
     if _want_interactive(interactive):
         # explicit --interactive (True) gets a prominent note; auto-detected is softer
         lead = "NOTE: " if interactive is True else ""
@@ -252,6 +259,20 @@ def cmd_status(cfg: Config) -> int:
     return 0
 
 
+# exit codes for `wiki status --source`: 0 done, 1 failed, 2 unknown, 3 in-progress
+_SOURCE_EXIT = {"processed": 0, "failed": 1, "untracked": 2,
+                "queued": 3, "ingesting": 3}
+
+
+def cmd_status_source(cfg: Config, source: str) -> int:
+    """Report one source's ingest state and return a state-coded exit so an agent
+    can poll until done (exit 3 = in progress)."""
+    st = source_state(cfg, source)
+    line = st.state if not st.detail else f"{st.state}  {st.detail}"
+    print(line)
+    return _SOURCE_EXIT.get(st.state, 2)
+
+
 def _render_findings(findings, deep_report: str) -> str:
     lines: list[str] = []
     if not findings:
@@ -269,7 +290,17 @@ def _render_findings(findings, deep_report: str) -> str:
 def _render_review(cfg: Config, source: str | None = None) -> str:
     items = list_items(cfg, source=source)
     if not items:
-        return "no open clarifications"
+        if source is None:
+            return "no open clarifications"
+        # Disambiguate the empty case for a specific source via its ingest state.
+        st = source_state(cfg, source).state
+        if st in ("queued", "ingesting"):
+            return f"still processing ({st}) — no clarifications yet"
+        if st == "failed":
+            return f"ingest failed — run `wiki status --source {source}`"
+        if st == "untracked":
+            return "not found — is the path right?"
+        return "processed — no open clarifications"
     by_source: dict[str, list] = {}
     for it in items:
         by_source.setdefault(it.source, []).append(it)
@@ -408,6 +439,8 @@ def main(argv=None) -> int:
     if ns.command == "import":
         return cmd_import(cfg, ns.file, interactive=ns.interactive)
     if ns.command == "status":
+        if ns.source is not None:
+            return cmd_status_source(cfg, ns.source)
         return cmd_status(cfg)
     if ns.command == "doctor":
         from wiki_daemon import doctor
