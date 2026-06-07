@@ -98,10 +98,16 @@ Three verbs, escalating cost:
 wiki review                          # list open items, grouped by source;
                                      #   each shows question + numbered options,
                                      #   ★ marks the recommended default
+wiki review --source <path>          # list only items whose source: matches <path>
+                                     #   (the agent runs this right after ingest)
 wiki review accept <id>              # take the default → delete file + log line, NO LLM
 wiki review answer <id> --pick N     # choose option N      → apply pass (LLM)
 wiki review answer <id> "free text"  # custom override      → apply pass (LLM)
 ```
+
+`--source` accepts the same vault-relative path the agent just ingested (e.g.
+`raw/sources/<file>.md`); matching is on the item's `source:` value. This keeps
+the post-ingest prompt focused on the new material instead of the whole backlog.
 
 - `--pick N` and a positional answer string are mutually exclusive; `--pick`
   avoids guessing whether `2` means "option 2" or the literal text. Out-of-range
@@ -142,13 +148,15 @@ Not in scope: a resumable "sync structured ingest" handshake for agents
   - new `accept_item(cfg, id) -> ReviewItem|raises`: assert the file exists,
     append the accepted-log line to `wiki/log.md`, delete the review file. Pure
     file ops, no runner.
+  - `list_items(cfg, *, source=None)`: optional filter to items whose `source:`
+    equals the given vault-relative path.
   - `write_answer` unchanged for free text; add a helper to resolve `--pick N`
     to `options[N-1]` before calling it.
 - `ops.py` — `apply_clarification` unchanged (the pick path just feeds it the
   selected option text via `answer`).
 - `cli.py`
   - `review` renderer: group by `source`, number options, mark `recommended`
-    with ★.
+    with ★. `review` subparser gains `--source <path>` → `list_items(source=…)`.
   - `accept` subcommand → `review.accept_item` then print `accepted <id>`.
   - `answer` subcommand gains `--pick N` (mutually exclusive with the positional
     `text`); validate range; map to option text; then the existing answer→apply
@@ -175,15 +183,25 @@ Extend RAISE CLARIFICATION on both branches:
 
 ## Skill (`skills/wiki/SKILL.md`)
 
-Update the Review section to teach the new flow:
+Update the skill so ingest and review read as **one proactive flow** — this is
+how an async agent gives the user a near-interactive experience without blocking
+the subprocess:
 
-- Frame review as "an audit log of decisions the maintainer already applied —
-  usually you just `accept`."
-- Document `wiki review` (grouped, numbered options, ★ default),
-  `wiki review accept <id>` (cheap, no LLM — prefer this for the common case),
-  `wiki review answer <id> --pick N`, and `wiki review answer <id> "text"`.
+- **Ingest is a two-step recipe.** After `wiki import --no-interactive <file>`
+  (or `ingest`), the agent IMMEDIATELY runs `wiki review --source <file>` and
+  surfaces any clarifications to the user in chat. Framing: "ingest finishes
+  instantly with the maintainer's best-guess choices; the moment right after —
+  while the user is still looking at the material they just sent — is the best
+  time to walk through any open questions."
+- Present each question with its numbered options and the recommended default;
+  let the conversation decide. Resolve in chat with `accept <id>` (the common
+  case — no LLM), `answer <id> --pick N`, or `answer <id> "text"`.
+- Frame the review queue itself as "an audit log of decisions the maintainer
+  already applied — usually you just `accept`."
 - Note that one source can raise multiple questions, each resolved
-  independently.
+  independently; `--source` scopes the prompt to just the new material.
+- Reassure: the user is never *blocked* — they can ignore the questions and the
+  tentative choices stand; review is an invitation, not a gate.
 
 ## Testing strategy (TDD)
 
@@ -192,12 +210,15 @@ Pure-Python, no network / no `claude`:
 - `tests/test_review.py`
   - parse an item *with* `options`/`recommended`; and *without* (back-compat →
     `[]`/`None`).
+  - `list_items(source=…)` returns only items matching that source; `None`
+    returns all.
   - `accept_item` deletes the file and appends the accepted-log line, with **no
     runner invoked**; raises on unknown id.
   - `--pick` resolution: `N` → `options[N-1]`; out-of-range raises; `--pick`
     with no `options` errors.
 - `tests/test_cli.py`
-  - `accept` parser + `answer --pick N` parser (mutually exclusive with text).
+  - `accept` parser + `answer --pick N` parser (mutually exclusive with text);
+    `review --source <path>` parser + filtered render.
   - `cmd_review_accept` prints `accepted` and removes the item (monkeypatched
     log path); `cmd_review_answer --pick N` feeds the right option text to a
     faked `apply_clarification`.
