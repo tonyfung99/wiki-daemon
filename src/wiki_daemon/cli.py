@@ -14,7 +14,10 @@ from wiki_daemon.importer import import_source
 from wiki_daemon.ops import apply_clarification, ingest, ingest_interactive, query
 from wiki_daemon.ops import lint_deep, lint_repair
 from wiki_daemon.review import list_items, write_answer
-from wiki_daemon.runtime import StatusFile, is_pid_alive
+from wiki_daemon.queue import Job, JobQueue
+from wiki_daemon.runtime import (
+    IngestLockBusy, StatusFile, daemon_owns_vault, is_pid_alive, vault_ingest_lock,
+)
 from wiki_daemon.scaffold import init_vault
 from wiki_daemon.state import StateStore
 
@@ -130,12 +133,35 @@ def _want_interactive(flag: bool | None) -> bool:
     return sys.stdin.isatty() if flag is None else flag
 
 
-def cmd_ingest(cfg: Config, file: str, *, interactive: bool | None = None) -> int:
-    store = StateStore(cfg.processed_json)
+def _defer_to_daemon(cfg: Config, path: Path, interactive: bool | None) -> int:
+    """The daemon owns this vault (single writer), so don't ingest in-process —
+    enqueue the file for it and return. Interactive ingest isn't possible while
+    the daemon runs; note that clarifications will land in the review queue."""
+    q = JobQueue(cfg.queue_dir)
+    q.enqueue(Job(type="ingest", payload=str(path)))
+    pending = len(list(cfg.queue_dir.glob("pending-*.json")))
+    print(f"queued for the running daemon ({pending} pending)")
     if _want_interactive(interactive):
-        result = ingest_interactive(cfg, Path(file), store=store)
-    else:
-        result = ingest(cfg, Path(file), store=store)
+        # explicit --interactive (True) gets a prominent note; auto-detected is softer
+        lead = "NOTE: " if interactive is True else ""
+        print(f"{lead}daemon is serving this vault; your file will be ingested "
+              "headlessly — answer any clarifications with `wiki review`.")
+    return 0
+
+
+def _ingest_locked(cfg: Config, path: Path, interactive: bool | None) -> int:
+    """Ingest in-process under the per-vault lock (no daemon running). The lock
+    fails fast if another manual ingest holds it, instead of double-writing."""
+    store = StateStore(cfg.processed_json)
+    try:
+        with vault_ingest_lock(cfg):
+            if _want_interactive(interactive):
+                result = ingest_interactive(cfg, path, store=store)
+            else:
+                result = ingest(cfg, path, store=store)
+    except IngestLockBusy:
+        print("another ingest is in progress for this vault", file=sys.stderr)
+        return 1
     if result.skipped:
         print("skipped (already processed)")
         return 0
@@ -144,6 +170,13 @@ def cmd_ingest(cfg: Config, file: str, *, interactive: bool | None = None) -> in
         return 0
     print(f"ingest failed: {result.reason}", file=sys.stderr)
     return 1
+
+
+def cmd_ingest(cfg: Config, file: str, *, interactive: bool | None = None) -> int:
+    path = Path(file)
+    if daemon_owns_vault(cfg):
+        return _defer_to_daemon(cfg, path, interactive)
+    return _ingest_locked(cfg, path, interactive)
 
 
 def cmd_import(cfg: Config, file: str, *, interactive: bool | None = None) -> int:
@@ -153,20 +186,9 @@ def cmd_import(cfg: Config, file: str, *, interactive: bool | None = None) -> in
         print(f"import failed: {exc}", file=sys.stderr)
         return 1
     print(f"imported {dest.name}")
-
-    store = StateStore(cfg.processed_json)
-    if _want_interactive(interactive):
-        result = ingest_interactive(cfg, dest, store=store)
-    else:
-        result = ingest(cfg, dest, store=store)
-    if result.skipped:
-        print("skipped (already processed)")
-        return 0
-    if result.ok:
-        print("ingested")
-        return 0
-    print(f"ingest failed: {result.reason}", file=sys.stderr)
-    return 1
+    if daemon_owns_vault(cfg):
+        return _defer_to_daemon(cfg, dest, interactive)
+    return _ingest_locked(cfg, dest, interactive)
 
 
 def _render_status(cfg: Config) -> str:
