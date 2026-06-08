@@ -128,3 +128,54 @@ def test_fix_claude_md_skips_when_current(tmp_path, capsys):
     rc = _fix_claude_md(cfg, [check_claude_md(cfg)], yes=True)
     assert rc is None
     assert "fixed" not in capsys.readouterr().out
+
+
+# --- CLAUDE.md version stamp (2026-06-08) ---
+from wiki_daemon.maintainer import parse_version, template_version
+
+
+def test_check_claude_md_passes_when_version_current(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    init_vault(cfg)  # writes the stamped template -> current version
+    c = check_claude_md(cfg)
+    assert c.status == "PASS" and "up to date" in c.detail
+
+
+def test_check_claude_md_warns_when_unversioned(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    init_vault(cfg)
+    # strip the stamp: a pre-versioning vault (all sections present, no stamp)
+    text = cfg.claude_md.read_text(encoding="utf-8")
+    cfg.claude_md.write_text(text.replace(text.splitlines()[0] + "\n", "", 1),
+                             encoding="utf-8")
+    c = check_claude_md(cfg)
+    assert c.status == "WARN"
+    assert "wiki doctor --fix" in c.detail
+
+
+def test_fix_claude_md_stale_version_backs_up_and_overwrites(tmp_path, capsys):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    init_vault(cfg)
+    # downgrade: stamp an older version + drop the options instruction content
+    cfg.claude_md.write_text("<!-- wiki-template: v0 -->\n# Wiki Maintainer Instructions\n"
+                             "## INGEST operation\nold stale body\n", encoding="utf-8")
+    rc = _fix_claude_md(cfg, [check_claude_md(cfg)], yes=True)
+    assert rc is None
+    # backup created, file overwritten with the current stamped template
+    assert list(cfg.vault.glob("CLAUDE.md.bak-*")), "no backup written"
+    assert parse_version(cfg.claude_md.read_text(encoding="utf-8")) == template_version()
+    assert check_claude_md(cfg).status == "PASS"
+    assert "backed up" in capsys.readouterr().out.lower()
+
+
+def test_fix_claude_md_stale_noninteractive_without_yes_refuses(tmp_path, capsys, monkeypatch):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    init_vault(cfg)
+    cfg.claude_md.write_text("<!-- wiki-template: v0 -->\n# x\n## INGEST operation\nold\n",
+                             encoding="utf-8")
+    before = cfg.claude_md.read_text(encoding="utf-8")
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    rc = _fix_claude_md(cfg, [check_claude_md(cfg)], yes=False)
+    assert rc == 2
+    assert cfg.claude_md.read_text(encoding="utf-8") == before  # untouched
+    assert not list(cfg.vault.glob("CLAUDE.md.bak-*"))          # no backup written
