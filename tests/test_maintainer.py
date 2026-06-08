@@ -94,3 +94,28 @@ def test_apply_upgrade_noop_returns_same_text():
     new_text, added = apply_upgrade(text)
     assert added == []
     assert new_text == text
+
+
+# --- version stamp (2026-06-08) ---
+from wiki_daemon.maintainer import parse_version, template_version
+
+
+def test_template_has_version_stamp():
+    assert template_version() >= 1
+
+
+def test_parse_version_reads_stamp():
+    assert parse_version("<!-- wiki-template: v3 -->\n# Title\n") == 3
+
+
+def test_parse_version_none_when_absent():
+    assert parse_version("# Title\nno stamp here\n") is None
+
+
+def test_parse_version_none_when_malformed():
+    assert parse_version("<!-- wiki-template: vX -->\n") is None
+
+
+def test_stamp_does_not_break_section_parsing():
+    # the bundled template (now stamped) still parses to the canonical headers
+    assert [s.header for s in sections(template_text())] == TEMPLATE_HEADERS

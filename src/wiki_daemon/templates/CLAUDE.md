@@ -1,3 +1,4 @@
+<!-- wiki-template: v1 -->
 # Wiki Maintainer Instructions
 
 You maintain an LLM wiki: a compounding, interconnected Markdown knowledge base.

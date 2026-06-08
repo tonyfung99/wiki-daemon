@@ -14,12 +14,15 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 
 from wiki_daemon.config import Config
 from wiki_daemon.health import probe_auth
 from wiki_daemon.icloud import ensure_materialized, is_dataless
-from wiki_daemon.maintainer import apply_upgrade, missing_sections
+from wiki_daemon.maintainer import (
+    apply_upgrade, missing_sections, parse_version, template_text, template_version,
+)
 
 _ICLOUD_MARKER = "Mobile Documents/com~apple~CloudDocs"
 
@@ -138,38 +141,91 @@ def probe_existing(path: Path) -> Check:
                  else "detected dataless but could NOT materialize")
 
 
+def _claude_md_is_stale(text: str) -> bool:
+    """The vault CLAUDE.md content is behind the template (older or no stamp)."""
+    v = parse_version(text)
+    return v is None or v < template_version()
+
+
 def check_claude_md(cfg: Config) -> Check | None:
-    """WARN if the vault's CLAUDE.md is missing canonical template sections.
-    Returns None when the file is absent (already covered by vault:scaffolded)."""
+    """WARN if the vault's CLAUDE.md is behind the template — either its content
+    is stale (version stamp older/absent) or it is missing canonical sections.
+    Returns None when the file is absent (covered by vault:scaffolded)."""
     if not cfg.claude_md.exists():
         return None
-    missing = missing_sections(cfg.claude_md.read_text(encoding="utf-8"))
-    if not missing:
-        return Check("vault:claude-md", "PASS", "up to date")
-    names = ", ".join(s.header.removeprefix("## ") for s in missing)
+    text = cfg.claude_md.read_text(encoding="utf-8")
+    missing = missing_sections(text)
+    stale = _claude_md_is_stale(text)
+    if not missing and not stale:
+        return Check("vault:claude-md", "PASS", f"up to date (v{template_version()})")
+    reasons = []
+    if stale:
+        v = parse_version(text)
+        reasons.append("unversioned" if v is None
+                       else f"stale content (v{v} < v{template_version()})")
+    if missing:
+        names = ", ".join(s.header.removeprefix("## ") for s in missing)
+        reasons.append(f"missing {len(missing)} section(s) ({names})")
     return Check("vault:claude-md", "WARN",
-                 f"stale CLAUDE.md: missing {len(missing)} section(s) "
-                 f"({names}) — run `wiki doctor --fix`")
+                 "stale CLAUDE.md: " + "; ".join(reasons) + " — run `wiki doctor --fix`")
+
+
+def _confirm_or_refuse(plan: str, *, yes: bool) -> bool:
+    """Shared --fix gate: True to proceed. Non-interactive without --yes refuses
+    (caller returns 2); a declined TTY prompt aborts (caller returns None)."""
+    if yes:
+        return True
+    if not sys.stdin.isatty():
+        print("refusing to --fix without confirmation; re-run with --yes",
+              file=sys.stderr)
+        return False  # caller distinguishes via sys.stdin.isatty()
+    if input(f"{plan}. Proceed? [type 'yes'] ").strip() != "yes":
+        print("aborted")
+        return False
+    return True
+
+
+def _backup_path(cfg: Config) -> Path:
+    """A non-clobbering CLAUDE.md.bak-<date>[-N] path in the vault."""
+    base = cfg.vault / f"CLAUDE.md.bak-{date.today().isoformat()}"
+    cand, n = base, 2
+    while cand.exists():
+        cand = cfg.vault / f"{base.name}-{n}"
+        n += 1
+    return cand
 
 
 def _fix_claude_md(cfg: Config, checks: list[Check], *, yes: bool) -> int | None:
-    """Repair a stale CLAUDE.md by appending missing sections. Returns an exit
-    code to force (2 = refused without confirmation), or None to fall through."""
+    """Repair a stale CLAUDE.md. Stale *content* (version behind/absent) → back up
+    the old file and overwrite with the fresh template. Current version but
+    *missing sections* → append them. Returns 2 if refused without confirmation,
+    else None."""
     cmd = next((c for c in checks if c.name == "vault:claude-md"), None)
     if cmd is None or cmd.status != "WARN":
         return None
-    new_text, added = apply_upgrade(cfg.claude_md.read_text(encoding="utf-8"))
+    text = cfg.claude_md.read_text(encoding="utf-8")
+
+    if _claude_md_is_stale(text):
+        plan = (f"will back up CLAUDE.md and overwrite it with template "
+                f"v{template_version()}")
+        if not _confirm_or_refuse(plan, yes=yes):
+            return None if sys.stdin.isatty() else 2  # declined=None, refused=2
+        backup = _backup_path(cfg)
+        backup.write_text(text, encoding="utf-8")
+        tmp = cfg.claude_md.with_suffix(cfg.claude_md.suffix + ".tmp")
+        tmp.write_text(template_text(), encoding="utf-8")
+        os.replace(tmp, cfg.claude_md)
+        print(f"backed up old CLAUDE.md -> {backup.name}; "
+              f"wrote template v{template_version()}")
+        return None
+
+    # current version, but a section was hand-removed: append it back.
+    new_text, added = apply_upgrade(text)
     if not added:
         return None
-    if not yes:
-        if not sys.stdin.isatty():
-            print("refusing to --fix without confirmation; re-run with --yes",
-                  file=sys.stderr)
-            return 2
-        plan = f"will append {len(added)} CLAUDE.md section(s)"
-        if input(f"{plan}. Proceed? [type 'yes'] ").strip() != "yes":
-            print("aborted")
-            return None
+    plan = f"will append {len(added)} CLAUDE.md section(s)"
+    if not _confirm_or_refuse(plan, yes=yes):
+        return None if sys.stdin.isatty() else 2  # declined=None, refused=2
     tmp = cfg.claude_md.with_suffix(cfg.claude_md.suffix + ".tmp")
     tmp.write_text(new_text, encoding="utf-8")
     os.replace(tmp, cfg.claude_md)

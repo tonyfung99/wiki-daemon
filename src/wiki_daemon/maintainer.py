@@ -8,16 +8,37 @@ sections — it never rewrites existing ones, so user customizations survive.
 """
 from __future__ import annotations
 
+import re
 from collections import namedtuple
 from importlib import resources
 
 Section = namedtuple("Section", "header text")
+
+# Hidden stamp on the template's first line, e.g. `<!-- wiki-template: v1 -->`.
+# Invisible in rendered Markdown and ignored by the maintainer LLM; lets `doctor`
+# detect a vault CLAUDE.md whose content is behind the template (not just missing
+# sections). Bump the integer whenever the template changes.
+_STAMP = re.compile(r"<!--\s*wiki-template:\s*v(\d+)\s*-->")
 
 
 def template_text() -> str:
     """The bundled canonical CLAUDE.md template."""
     return resources.files("wiki_daemon.templates").joinpath("CLAUDE.md").read_text(
         encoding="utf-8")
+
+
+def parse_version(text: str) -> int | None:
+    """The template version stamped in `text`, or None if absent/malformed."""
+    m = _STAMP.search(text)
+    return int(m.group(1)) if m else None
+
+
+def template_version() -> int:
+    """The bundled template's version. Assumes the template is always stamped."""
+    v = parse_version(template_text())
+    if v is None:  # pragma: no cover - the bundled template must carry a stamp
+        raise RuntimeError("bundled template is missing its version stamp")
+    return v
 
 
 def sections(text: str) -> list[Section]:
