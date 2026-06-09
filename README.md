@@ -23,6 +23,11 @@ WikiReader (iOS)  ──writes──▶  raw/sources/        (a clip lands as Ma
 wiki-daemon  ──watches raw/──▶  claude -p  ──writes──▶  wiki/   (LLM-owned pages)
 ```
 
+A source is plain Markdown. **Documents** (PDF, DOCX, PPTX, XLSX, HTML, CSV,
+JSON, XML) are auto-converted to Markdown on entry — both by `wiki import` and by
+the daemon when one is dropped into `raw/sources/` directly; the converted `.md`
+becomes the source of record and the original is archived to `raw/originals/`.
+
 The daemon is the **single writer** of `wiki/`: it serializes ingest jobs,
 de-dupes by content hash, recovers from crashes, and handles iCloud "dataless"
 files. The `raw/` → `wiki/` boundary is a firewall (the watcher only watches
@@ -126,7 +131,7 @@ export WIKI_VAULT="$VAULT"        # or set it once in your shell profile
 |---|---|
 | `wiki init --vault <path>` | Scaffold a vault (`CLAUDE.md`, `purpose.md`, `raw/`, `wiki/`). Idempotent. |
 | `wiki ingest --vault <path> [--interactive\|--no-interactive] <file>` | Ingest one source now. Interactive (the default in a terminal) asks clarifications live; headless queues them to `wiki/review/`. |
-| `wiki import --vault <path> [--interactive\|--no-interactive] <file>` | Copy any UTF-8 text file into `raw/sources/` (adds frontmatter if missing) and ingest it (same interactive/headless behavior as `ingest`). The original is left in place. |
+| `wiki import --vault <path> [--interactive\|--no-interactive] <file>` | Bring a file into `raw/sources/` and ingest it. Markdown/text lands as-is (frontmatter added if missing); **documents (PDF, DOCX, PPTX, XLSX, HTML, CSV, JSON, XML) are converted to Markdown** on the way in via [markitdown](https://github.com/microsoft/markitdown). The original is left in place. Same interactive/headless behavior as `ingest`. |
 | `wiki query --vault <path> [--save] "<question>"` | Ask the wiki a question — reads `index.md`, opens relevant pages, prints a cited answer. `--save` files it as a `wiki/queries/` page. |
 | `wiki lint --vault <path> [--deep] [--fix] [--yes]` | Health-check the wiki: dead links, iCloud conflict-dupes, orphans, index/log integrity. `--deep` adds an LLM semantic scan; `--fix` repairs (confirmed). |
 | `wiki status --vault <path> [--source <file>]` | Show daemon health: running?, auth state, queue depth, processed count, open clarifications, last error. With `--source`, report just that source's ingest state — `queued`/`ingesting`/`processed`/`failed`/`untracked` — and set an exit code (`0` processed, `1` failed, `2` untracked, `3` in progress) so an agent can poll until done. |

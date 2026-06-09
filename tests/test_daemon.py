@@ -162,3 +162,39 @@ def test_enqueue_reconcile_silent_when_zero(tmp_path, caplog):
     with caplog.at_level(logging.INFO, logger="wiki_daemon"):
         enqueue_reconcile(cfg, q, store)
     assert not any("reconcile:" in r.getMessage() for r in caplog.records)
+
+
+# --- convertible files: convert (no ingest) + enqueue the .md (2026-06-09) ---
+def test_drain_converts_pdf_then_ingests_only_the_md_once(tmp_path, monkeypatch):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    cfg.raw_sources.mkdir(parents=True)
+    q = JobQueue(cfg.queue_dir)
+    q.enqueue(Job(type="ingest", payload=str(cfg.raw_sources / "paper.pdf")))
+    import wiki_daemon.daemon as d
+    # fake conversion: write the .md the daemon should then enqueue + ingest
+    def fake_normalize(cfg, path):
+        md = cfg.raw_sources / "paper.md"
+        md.write_text("---\ntype: source\n---\nconverted\n", encoding="utf-8")
+        return md
+    monkeypatch.setattr(d, "normalize_in_place", fake_normalize)
+    ingested = []
+    def fake_ingest(c, p):
+        ingested.append(str(p))
+        class R:
+            ok = True; skipped = False; reason = ""; kind = "ok"
+        return R()
+    drained = drain_once(cfg, q, ingest_fn=fake_ingest, prepare_fn=lambda p: True)
+    # the PDF itself was never ingested; only the converted .md was, exactly once
+    assert not any(p.endswith("paper.pdf") for p in ingested)
+    assert [p for p in ingested if p.endswith("paper.md")] == [
+        str(cfg.raw_sources / "paper.md")]
+    assert drained.ingested == 1
+
+
+def test_drain_md_path_ingests_normally(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    cfg.raw_sources.mkdir(parents=True)
+    q = JobQueue(cfg.queue_dir)
+    q.enqueue(Job(type="ingest", payload=str(cfg.raw_sources / "a.md")))
+    drained = drain_once(cfg, q, ingest_fn=_fake_ok, prepare_fn=lambda p: True)
+    assert drained.ingested == 1

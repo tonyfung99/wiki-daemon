@@ -74,8 +74,10 @@ material's clarifications while the user is still looking at what they sent —
 this is the best moment to walk through any open questions.
 
 ```bash
-# 1. Import any file from disk (copies it into the vault, then ingests):
-wiki import --no-interactive ~/Downloads/article.md
+# 1. Import any file from disk (lands it in the vault, then ingests).
+#    Documents (PDF/DOCX/PPTX/XLSX/HTML/CSV/JSON/XML) are auto-converted to
+#    Markdown; the original is archived under raw/originals/.
+wiki import --no-interactive ~/Downloads/report.pdf
 # (or ingest a clip already in the vault: wiki ingest --no-interactive "raw/sources/<file>.md")
 
 # 2. Right away, surface the clarifications THIS material raised:
