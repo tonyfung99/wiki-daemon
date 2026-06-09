@@ -40,8 +40,29 @@ daemon, manual ingest takes a local lock so two commands can't double-write.
 
 - **macOS** (the production host is Intel x86_64 on macOS 15.7.3 Sequoia).
 - **Python 3.12+**.
-- The **[`claude` CLI](https://docs.claude.com/en/docs/claude-code)** installed
-  and authenticated (`claude --version`).
+- An **agentic CLI** installed and authenticated — one of
+  [`claude`](https://docs.claude.com/en/docs/claude-code) (default),
+  [`gemini`](https://github.com/google-gemini/gemini-cli), or
+  [`codex`](https://developers.openai.com/codex/cli). wiki-daemon drives it to
+  read sources and write the wiki.
+
+## Providers (which LLM CLI drives the wiki)
+
+wiki-daemon uses an agentic CLI that edits the vault's files. Pick one with
+`--provider` (or `WIKI_PROVIDER`, or `provider = "…"` in
+`~/.config/wiki/config.toml`); default is `claude`:
+
+| `--provider` | CLI | brain file it reads | auth |
+|---|---|---|---|
+| `claude` | Claude Code | `CLAUDE.md` | `claude setup-token` |
+| `gemini` | Gemini CLI | `GEMINI.md` | `GOOGLE_API_KEY` / `gemini` login (free tier) |
+| `codex` | Codex CLI | `AGENTS.md` | `codex login` / `OPENAI_API_KEY` |
+
+The maintainer instructions live in **one canonical `AGENTS.md`**; `CLAUDE.md`
+and `GEMINI.md` are symlinks to it, so every provider gets identical reasoning.
+`wiki doctor` verifies the brain is current and the symlinks are intact, and
+`wiki doctor --fix` repairs any iCloud-broken symlink (and migrates a legacy
+`CLAUDE.md` vault to `AGENTS.md`).
 
 ## Install
 

@@ -22,8 +22,8 @@ _STAMP = re.compile(r"<!--\s*wiki-template:\s*v(\d+)\s*-->")
 
 
 def template_text() -> str:
-    """The bundled canonical CLAUDE.md template."""
-    return resources.files("wiki_daemon.templates").joinpath("CLAUDE.md").read_text(
+    """The bundled canonical maintainer-brain template (AGENTS.md)."""
+    return resources.files("wiki_daemon.templates").joinpath("AGENTS.md").read_text(
         encoding="utf-8")
 
 

@@ -1,11 +1,12 @@
 # src/wiki_daemon/prompts.py
-"""Thin operation prompts. The real algorithm lives in the vault's CLAUDE.md."""
+"""Thin operation prompts. The real algorithm lives in the vault's project
+instructions (AGENTS.md, which each agent CLI reads via its own filename)."""
 from __future__ import annotations
 
 
 def ingest_prompt(source_rel_path: str, *, interactive: bool = False) -> str:
     base = (
-        "Follow the INGEST operation defined in CLAUDE.md exactly.\n"
+        "Follow the INGEST operation defined in your project instructions exactly.\n"
         f"Ingest this single source file into the wiki: {source_rel_path}\n"
         "Create/update the relevant entity and concept pages, ensure a source "
         "summary page exists, update wiki/index.md, and append to wiki/log.md. "
@@ -23,13 +24,13 @@ def ingest_prompt(source_rel_path: str, *, interactive: bool = False) -> str:
     return base + (
         "\nYou are headless — never block. If a structural decision is genuinely "
         "ambiguous, make a best-effort choice and record a clarification under "
-        "wiki/review/ (RAISE CLARIFICATION in CLAUDE.md)."
+        "wiki/review/ (RAISE CLARIFICATION in your project instructions)."
     )
 
 
 def apply_clarification_prompt(review_rel_path: str) -> str:
     return (
-        "Follow the APPLY CLARIFICATION operation defined in CLAUDE.md exactly.\n"
+        "Follow the APPLY CLARIFICATION operation defined in your project instructions exactly.\n"
         f"Apply this answered review file: {review_rel_path}\n"
         "Update the relevant wiki pages using the user's answer, append a line "
         "to wiki/log.md, then delete the review file. Do not modify anything "
@@ -39,7 +40,7 @@ def apply_clarification_prompt(review_rel_path: str) -> str:
 
 def query_prompt(question: str, *, save: bool = False) -> str:
     base = (
-        "Follow the QUERY operation defined in CLAUDE.md exactly.\n"
+        "Follow the QUERY operation defined in your project instructions exactly.\n"
         f"Answer this question from the wiki, citing the pages you used: {question}\n"
         "Read wiki/index.md first, open the relevant pages, and synthesize an "
         "answer with [[wiki-link]] citations. Use rich Markdown where it helps — "
@@ -64,7 +65,7 @@ def query_prompt(question: str, *, save: bool = False) -> str:
 
 def lint_prompt() -> str:
     return (
-        "Follow the LINT operation defined in CLAUDE.md exactly.\n"
+        "Follow the LINT operation defined in your project instructions exactly.\n"
         "This is READ-ONLY: scan the wiki for contradictions, stale claims, and "
         "data gaps. List each issue with the page(s) involved. Do not modify any "
         "files."
@@ -74,7 +75,7 @@ def lint_prompt() -> str:
 def lint_repair_prompt(findings_text: str, deep_report: str = "") -> str:
     deep = f"\nSemantic findings to also resolve:\n{deep_report}" if deep_report else ""
     return (
-        "Follow the LINT REPAIR operation defined in CLAUDE.md exactly.\n"
+        "Follow the LINT REPAIR operation defined in your project instructions exactly.\n"
         f"Fix these findings:\n{findings_text}{deep}\n"
         "For each: create the missing page OR remove the dead link (your "
         "judgment), de-orphan pages by linking/indexing them, fill index gaps, "

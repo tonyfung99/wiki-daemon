@@ -58,124 +58,91 @@ def test_check_auth_unavailable_is_warn(tmp_path):
     assert c.status == "WARN"
 
 
-# --- vault:claude-md drift check ---
-from wiki_daemon.doctor import check_claude_md
-from wiki_daemon.maintainer import template_text
+# --- vault:brain: AGENTS.md canonical + provider symlinks (2026-06-10) ---
+from wiki_daemon.doctor import check_brain, _fix_brain
+from wiki_daemon.maintainer import parse_version, template_text, template_version
+
+_STALE = "<!-- wiki-template: v0 -->\n# x\n## INGEST operation\nold\n"
 
 
-def test_check_claude_md_current_passes(tmp_path):
-    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
-    init_vault(cfg)  # scaffolds the current template
-    c = check_claude_md(cfg)
-    assert c.name == "vault:claude-md"
-    assert c.status == "PASS"
-
-
-def test_check_claude_md_stale_warns_with_hint(tmp_path):
+def test_check_brain_current_passes(tmp_path):
     cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
     init_vault(cfg)
-    # downgrade to an old-prefix brain (INGEST only, no clarification/query/lint)
-    tmpl = template_text()
-    old = tmpl[: tmpl.index("## RAISE CLARIFICATION")].rstrip() + "\n"
-    cfg.claude_md.write_text(old, encoding="utf-8")
-    c = check_claude_md(cfg)
-    assert c.status == "WARN"
-    assert "RAISE CLARIFICATION" in c.detail
-    assert "wiki doctor --fix" in c.detail
+    c = check_brain(cfg)
+    assert c.name == "vault:brain" and c.status == "PASS"
+    assert "symlinks ok" in c.detail
 
 
-def test_check_claude_md_absent_returns_none(tmp_path):
+def test_check_brain_absent_returns_none(tmp_path):
     cfg = Config(vault=tmp_path / "missing", state_root=tmp_path / "s")
-    assert check_claude_md(cfg) is None
+    assert check_brain(cfg) is None
 
 
-# --- _fix_claude_md behavior (hermetic: no claude / icloud) ---
-from wiki_daemon.doctor import _fix_claude_md
-
-
-def _stale_vault(tmp_path):
+def test_check_brain_warns_on_broken_symlink(tmp_path):
     cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
     init_vault(cfg)
-    tmpl = template_text()
-    old = tmpl[: tmpl.index("## RAISE CLARIFICATION")].rstrip() + "\n"
-    cfg.claude_md.write_text(old, encoding="utf-8")
-    return cfg
+    cfg.brain_links["CLAUDE.md"].unlink()   # iCloud "ate" the symlink
+    c = check_brain(cfg)
+    assert c.status == "WARN" and "CLAUDE.md" in c.detail
 
 
-def test_fix_claude_md_appends_when_warned(tmp_path, capsys):
-    cfg = _stale_vault(tmp_path)
-    checks = [check_claude_md(cfg)]
-    rc = _fix_claude_md(cfg, checks, yes=True)
+def test_check_brain_warns_on_stale_agents(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    init_vault(cfg)
+    cfg.agents_md.write_text(_STALE, encoding="utf-8")
+    c = check_brain(cfg)
+    assert c.status == "WARN" and "stale content" in c.detail
+
+
+def test_check_brain_warns_on_legacy_claude_md(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    cfg.vault.mkdir(parents=True)
+    cfg.claude_md.write_text(template_text(), encoding="utf-8")  # real file, no AGENTS.md
+    c = check_brain(cfg)
+    assert c.status == "WARN" and "legacy CLAUDE.md" in c.detail
+
+
+def test_fix_brain_repairs_broken_symlink(tmp_path, capsys):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    init_vault(cfg)
+    cfg.brain_links["GEMINI.md"].unlink()
+    rc = _fix_brain(cfg, [check_brain(cfg)], yes=True)
     assert rc is None
-    # CLAUDE.md is now complete and the fix was reported
-    assert check_claude_md(cfg).status == "PASS"
-    assert "fixed: appended" in capsys.readouterr().out
+    assert check_brain(cfg).status == "PASS"   # symlink recreated
 
 
-def test_fix_claude_md_noninteractive_without_yes_refuses(tmp_path, capsys, monkeypatch):
-    cfg = _stale_vault(tmp_path)
-    before = cfg.claude_md.read_text(encoding="utf-8")
+def test_fix_brain_migrates_legacy_claude_md(tmp_path, capsys):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    cfg.vault.mkdir(parents=True)
+    cfg.claude_md.write_text(template_text(), encoding="utf-8")
+    rc = _fix_brain(cfg, [check_brain(cfg)], yes=True)
+    assert rc is None
+    assert cfg.agents_md.is_file() and not cfg.agents_md.is_symlink()
+    assert cfg.claude_md.is_symlink()
+    assert cfg.claude_md.resolve() == cfg.agents_md.resolve()
+    assert list(cfg.vault.glob("CLAUDE.md.bak-*"))
+    assert check_brain(cfg).status == "PASS"
+    assert "migrated CLAUDE.md" in capsys.readouterr().out
+
+
+def test_fix_brain_stale_agents_backs_up_and_overwrites(tmp_path, capsys):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    init_vault(cfg)
+    cfg.agents_md.write_text(_STALE, encoding="utf-8")
+    rc = _fix_brain(cfg, [check_brain(cfg)], yes=True)
+    assert rc is None
+    assert list(cfg.vault.glob("AGENTS.md.bak-*"))
+    assert parse_version(cfg.agents_md.read_text(encoding="utf-8")) == template_version()
+    assert check_brain(cfg).status == "PASS"
+
+
+def test_fix_brain_noninteractive_without_yes_refuses(tmp_path, capsys, monkeypatch):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    init_vault(cfg)
+    cfg.agents_md.write_text(_STALE, encoding="utf-8")
+    before = cfg.agents_md.read_text(encoding="utf-8")
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
-    rc = _fix_claude_md(cfg, [check_claude_md(cfg)], yes=False)
+    rc = _fix_brain(cfg, [check_brain(cfg)], yes=False)
     assert rc == 2
-    assert cfg.claude_md.read_text(encoding="utf-8") == before  # unchanged
+    assert cfg.agents_md.read_text(encoding="utf-8") == before
     assert "re-run with --yes" in capsys.readouterr().err
-
-
-def test_fix_claude_md_skips_when_current(tmp_path, capsys):
-    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
-    init_vault(cfg)  # current template -> PASS
-    rc = _fix_claude_md(cfg, [check_claude_md(cfg)], yes=True)
-    assert rc is None
-    assert "fixed" not in capsys.readouterr().out
-
-
-# --- CLAUDE.md version stamp (2026-06-08) ---
-from wiki_daemon.maintainer import parse_version, template_version
-
-
-def test_check_claude_md_passes_when_version_current(tmp_path):
-    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
-    init_vault(cfg)  # writes the stamped template -> current version
-    c = check_claude_md(cfg)
-    assert c.status == "PASS" and "up to date" in c.detail
-
-
-def test_check_claude_md_warns_when_unversioned(tmp_path):
-    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
-    init_vault(cfg)
-    # strip the stamp: a pre-versioning vault (all sections present, no stamp)
-    text = cfg.claude_md.read_text(encoding="utf-8")
-    cfg.claude_md.write_text(text.replace(text.splitlines()[0] + "\n", "", 1),
-                             encoding="utf-8")
-    c = check_claude_md(cfg)
-    assert c.status == "WARN"
-    assert "wiki doctor --fix" in c.detail
-
-
-def test_fix_claude_md_stale_version_backs_up_and_overwrites(tmp_path, capsys):
-    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
-    init_vault(cfg)
-    # downgrade: stamp an older version + drop the options instruction content
-    cfg.claude_md.write_text("<!-- wiki-template: v0 -->\n# Wiki Maintainer Instructions\n"
-                             "## INGEST operation\nold stale body\n", encoding="utf-8")
-    rc = _fix_claude_md(cfg, [check_claude_md(cfg)], yes=True)
-    assert rc is None
-    # backup created, file overwritten with the current stamped template
-    assert list(cfg.vault.glob("CLAUDE.md.bak-*")), "no backup written"
-    assert parse_version(cfg.claude_md.read_text(encoding="utf-8")) == template_version()
-    assert check_claude_md(cfg).status == "PASS"
-    assert "backed up" in capsys.readouterr().out.lower()
-
-
-def test_fix_claude_md_stale_noninteractive_without_yes_refuses(tmp_path, capsys, monkeypatch):
-    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
-    init_vault(cfg)
-    cfg.claude_md.write_text("<!-- wiki-template: v0 -->\n# x\n## INGEST operation\nold\n",
-                             encoding="utf-8")
-    before = cfg.claude_md.read_text(encoding="utf-8")
-    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
-    rc = _fix_claude_md(cfg, [check_claude_md(cfg)], yes=False)
-    assert rc == 2
-    assert cfg.claude_md.read_text(encoding="utf-8") == before  # untouched
-    assert not list(cfg.vault.glob("CLAUDE.md.bak-*"))          # no backup written

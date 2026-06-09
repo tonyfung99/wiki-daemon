@@ -53,3 +53,24 @@ def test_template_has_lint_sections(tmp_path):
     text = (cfg.vault / "CLAUDE.md").read_text(encoding="utf-8")
     assert "## LINT operation" in text
     assert "## LINT REPAIR" in text
+
+
+# --- AGENTS.md canonical brain + provider symlinks (2026-06-10) ---
+import os
+
+
+def test_init_writes_agents_md_and_symlinks(tmp_path):
+    from wiki_daemon.config import Config
+    from wiki_daemon.scaffold import init_vault
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    init_vault(cfg)
+    # canonical brain is a real file with the maintainer instructions
+    assert cfg.agents_md.is_file() and not cfg.agents_md.is_symlink()
+    assert "INGEST operation" in cfg.agents_md.read_text(encoding="utf-8")
+    # provider files are symlinks resolving to AGENTS.md
+    for name, link in cfg.brain_links.items():
+        assert link.is_symlink(), f"{name} not a symlink"
+        assert link.resolve() == cfg.agents_md.resolve()
+        assert "INGEST operation" in link.read_text(encoding="utf-8")
+    # raw/originals scaffolded too
+    assert cfg.raw_originals.is_dir()

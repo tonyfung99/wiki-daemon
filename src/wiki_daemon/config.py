@@ -16,6 +16,7 @@ class Config:
     vault: Path
     state_root: Path = field(default_factory=_default_state_root)
     claude_bin: str = "claude"
+    provider: str = "claude"   # which agentic CLI: claude | gemini | codex
 
     def __post_init__(self) -> None:
         self.vault = Path(self.vault).expanduser().resolve()
@@ -41,6 +42,17 @@ class Config:
     @property
     def review(self) -> Path:
         return self.vault / "wiki" / "review"
+
+    @property
+    def agents_md(self) -> Path:
+        """Canonical maintainer brain (vendor-neutral); provider files symlink here."""
+        return self.vault / "AGENTS.md"
+
+    @property
+    def brain_links(self) -> dict[str, Path]:
+        """Provider-specific brain filenames that symlink to AGENTS.md."""
+        return {"CLAUDE.md": self.vault / "CLAUDE.md",
+                "GEMINI.md": self.vault / "GEMINI.md"}
 
     @property
     def claude_md(self) -> Path:
