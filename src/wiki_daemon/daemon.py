@@ -14,8 +14,10 @@ from watchdog.observers import Observer
 
 from wiki_daemon.backoff import next_backoff
 from wiki_daemon.config import Config
+from wiki_daemon.convert import CONVERT_EXTENSIONS
 from wiki_daemon.health import probe_auth
 from wiki_daemon.icloud import prepare_source
+from wiki_daemon.importer import normalize_in_place
 from wiki_daemon.logging_setup import configure_logging
 from wiki_daemon.ops import ingest as _ingest
 from wiki_daemon.queue import Job, JobQueue
@@ -67,6 +69,19 @@ def drain_once(cfg: Config, q: JobQueue, *, ingest_fn=None,
         if job is None:
             break
         if prepare_fn(Path(job.payload)):
+            # A convertible document is normalized to Markdown (NOT ingested here):
+            # convert -> .md + archive original, then enqueue the .md for its own
+            # ingest job. Separating convert from ingest avoids double-ingest when
+            # the new .md is re-seen by the watcher.
+            if Path(job.payload).suffix.lower() in CONVERT_EXTENSIONS:
+                try:
+                    md = normalize_in_place(cfg, Path(job.payload))
+                    _log.info("converted %s -> %s", job.payload, md.name)
+                    q.enqueue(Job(type="ingest", payload=str(md)))
+                except ValueError as exc:
+                    _log.warning("convert FAILED %s — %s", job.payload, exc)
+                q.complete(job)
+                continue
             if status is not None:
                 status.update(last_attempt=now_iso())
             _log.info("ingesting %s", job.payload)

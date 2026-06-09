@@ -30,6 +30,11 @@ class Config:
         return self.vault / "raw" / "sources"
 
     @property
+    def raw_originals(self) -> Path:
+        """Where original binaries are archived after conversion to Markdown."""
+        return self.vault / "raw" / "originals"
+
+    @property
     def wiki(self) -> Path:
         return self.vault / "wiki"
 

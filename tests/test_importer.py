@@ -105,3 +105,49 @@ def test_import_non_utf8_raises(tmp_path):
     src.write_bytes(b"\xff\xfe\x00\x01")
     with pytest.raises(ValueError):
         import_source(cfg, src)
+
+
+# --- multi-format conversion (2026-06-09) ---
+from wiki_daemon.config import Config
+from wiki_daemon.importer import import_source, normalize_in_place
+
+
+def test_import_converts_pdf_via_seam(tmp_path, monkeypatch):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    cfg.raw_sources.mkdir(parents=True)
+    import wiki_daemon.importer as imp
+    monkeypatch.setattr(imp, "convert_to_markdown",
+                        lambda p: "# Converted\nfrom a pdf\n")
+    ext = tmp_path / "Report.pdf"
+    ext.write_bytes(b"%PDF-1.4 fake bytes")
+    dest = import_source(cfg, ext)
+    assert dest.suffix == ".md"
+    body = dest.read_text(encoding="utf-8")
+    assert "from a pdf" in body
+    assert body.startswith("---")          # synthesized frontmatter
+    assert ext.exists()                     # external original untouched
+
+
+def test_import_text_still_passthrough(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    cfg.raw_sources.mkdir(parents=True)
+    ext = tmp_path / "note.txt"
+    ext.write_text("plain note\n", encoding="utf-8")
+    dest = import_source(cfg, ext)
+    assert dest.suffix == ".md"
+    assert "plain note" in dest.read_text(encoding="utf-8")
+
+
+def test_normalize_in_place_converts_and_archives(tmp_path, monkeypatch):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    cfg.raw_sources.mkdir(parents=True)
+    import wiki_daemon.importer as imp
+    monkeypatch.setattr(imp, "convert_to_markdown",
+                        lambda p: "# Doc\nconverted body\n")
+    raw = cfg.raw_sources / "paper.pdf"
+    raw.write_bytes(b"%PDF fake")
+    md = normalize_in_place(cfg, raw)
+    assert md.suffix == ".md" and md.parent == cfg.raw_sources
+    assert "converted body" in md.read_text(encoding="utf-8")
+    assert not raw.exists()                              # moved out of sources
+    assert (cfg.raw_originals / "paper.pdf").exists()    # archived
