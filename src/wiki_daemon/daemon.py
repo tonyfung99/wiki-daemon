@@ -129,8 +129,13 @@ class _Handler(FileSystemEventHandler):
 
 
 def _run_setup_token(cfg: Config) -> int:
-    """Launch the interactive `claude setup-token` flow (inherits stdio)."""
-    return subprocess.run([cfg.claude_bin, "setup-token"]).returncode
+    """Launch the provider's interactive auth flow. Only Claude has a scriptable
+    `setup-token`; other providers print their hint (the operator logs in)."""
+    if cfg.provider == "claude":
+        return subprocess.run([cfg.claude_bin, "setup-token"]).returncode
+    from wiki_daemon.agent import get_provider
+    _log.warning("auth recovery: %s", get_provider(cfg).auth_hint)
+    return 1
 
 
 def _preflight_auth(
@@ -144,18 +149,20 @@ def _preflight_auth(
     """Verify headless claude auth before watching. Returns True to proceed.
     Non-interactive failure -> False (caller exits non-zero). Interactive
     failure -> launch `claude setup-token`, re-probe, repeat until ok or abort."""
+    from wiki_daemon.agent import get_provider
+    hint = get_provider(cfg).auth_hint
     isatty_fn = isatty_fn or sys.stdin.isatty
     res = probe_fn(cfg)
     if res.state == "ok":
         _log.info("auth: ok")
         return True
     if not isatty_fn():
-        _log.error("auth FAILED (%s): %s. Run `claude setup-token`, then restart. "
-                   "Exiting.", res.state, res.detail)
+        _log.error("auth FAILED (%s): %s. %s, then restart. Exiting.",
+                   res.state, res.detail, hint)
         return False
     while res.state != "ok":
-        _log.warning("auth FAILED (%s): %s. Launching `claude setup-token`...",
-                     res.state, res.detail)
+        _log.warning("auth FAILED (%s): %s. Attempting recovery (%s)...",
+                     res.state, res.detail, hint)
         setup_token_fn(cfg)
         res = probe_fn(cfg)
         if res.state == "ok":

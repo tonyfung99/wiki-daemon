@@ -54,10 +54,12 @@ def check_environment() -> Check:
     return Check("environment", "PASS", f"arch={arch}, macOS={mac}{note}")
 
 
-def check_tooling() -> list[Check]:
+def check_tooling(cfg: Config) -> list[Check]:
+    from wiki_daemon.agent import get_provider
     have_brctl = shutil.which("brctl") is not None
     have_fpctl = shutil.which("fileproviderctl") is not None
-    have_claude = shutil.which("claude") is not None
+    provider = get_provider(cfg)
+    have_agent = shutil.which(provider.bin) is not None
     return [
         Check(
             "tool:materialize",
@@ -66,27 +68,30 @@ def check_tooling() -> list[Check]:
             f"fileproviderctl={'yes' if have_fpctl else 'no'}",
         ),
         Check(
-            "tool:claude",
-            "PASS" if have_claude else "FAIL",
-            "found" if have_claude else "NOT on PATH — daemon can't ingest",
+            f"tool:{provider.name}",
+            "PASS" if have_agent else "FAIL",
+            "found" if have_agent else "NOT on PATH — daemon can't ingest",
         ),
     ]
 
 
 def check_auth(cfg: Config, *, probe_fn=probe_auth) -> Check:
+    from wiki_daemon.agent import get_provider
+    provider = get_provider(cfg)
+    name = f"tool:{provider.name}-auth"
     res = probe_fn(cfg)
     if res.state == "ok":
-        return Check("tool:claude-auth", "PASS", "authenticated")
+        return Check(name, "PASS", "authenticated")
     if res.state == "auth_failed":
-        return Check("tool:claude-auth", "FAIL",
-                     f"{res.detail} — run `claude setup-token`")
-    return Check("tool:claude-auth", "WARN", f"could not verify: {res.detail}")
+        return Check(name, "FAIL", f"{res.detail} — {provider.auth_hint}")
+    return Check(name, "WARN", f"could not verify: {res.detail}")
 
 
 def check_vault(cfg: Config) -> list[Check]:
     if not cfg.vault.exists():
         return [Check("vault", "FAIL", f"not found: {cfg.vault}")]
-    scaffolded = cfg.claude_md.exists() and cfg.raw_sources.exists() and cfg.wiki.exists()
+    scaffolded = ((cfg.agents_md.exists() or cfg.claude_md.exists())
+                  and cfg.raw_sources.exists() and cfg.wiki.exists())
     in_icloud = _ICLOUD_MARKER in str(cfg.vault)
     return [
         Check("vault:scaffolded", "PASS" if scaffolded else "WARN",
@@ -141,23 +146,39 @@ def probe_existing(path: Path) -> Check:
                  else "detected dataless but could NOT materialize")
 
 
-def _claude_md_is_stale(text: str) -> bool:
-    """The vault CLAUDE.md content is behind the template (older or no stamp)."""
+def _brain_is_stale(text: str) -> bool:
+    """The brain content is behind the template (older or no version stamp)."""
     v = parse_version(text)
     return v is None or v < template_version()
 
 
-def check_claude_md(cfg: Config) -> Check | None:
-    """WARN if the vault's CLAUDE.md is behind the template — either its content
-    is stale (version stamp older/absent) or it is missing canonical sections.
-    Returns None when the file is absent (covered by vault:scaffolded)."""
-    if not cfg.claude_md.exists():
+def _broken_brain_links(cfg: Config) -> list[str]:
+    """Provider brain filenames that are not intact symlinks to AGENTS.md."""
+    bad = []
+    for name, link in cfg.brain_links.items():
+        if not (link.is_symlink() and link.exists()
+                and link.resolve() == cfg.agents_md.resolve()):
+            bad.append(name)
+    return bad
+
+
+def check_brain(cfg: Config) -> Check | None:
+    """WARN if the maintainer brain is unhealthy: a legacy real CLAUDE.md awaiting
+    migration, stale/incomplete AGENTS.md content, or broken provider symlinks.
+    Returns None when nothing is scaffolded (covered by vault:scaffolded)."""
+    if not cfg.agents_md.exists():
+        if cfg.claude_md.exists() and not cfg.claude_md.is_symlink():
+            return Check("vault:brain", "WARN",
+                         "legacy CLAUDE.md (no AGENTS.md) — migrate with "
+                         "`wiki doctor --fix`")
         return None
-    text = cfg.claude_md.read_text(encoding="utf-8")
+    text = cfg.agents_md.read_text(encoding="utf-8")
     missing = missing_sections(text)
-    stale = _claude_md_is_stale(text)
-    if not missing and not stale:
-        return Check("vault:claude-md", "PASS", f"up to date (v{template_version()})")
+    stale = _brain_is_stale(text)
+    bad = _broken_brain_links(cfg)
+    if not missing and not stale and not bad:
+        return Check("vault:brain", "PASS",
+                     f"up to date (v{template_version()}); provider symlinks ok")
     reasons = []
     if stale:
         v = parse_version(text)
@@ -166,8 +187,10 @@ def check_claude_md(cfg: Config) -> Check | None:
     if missing:
         names = ", ".join(s.header.removeprefix("## ") for s in missing)
         reasons.append(f"missing {len(missing)} section(s) ({names})")
-    return Check("vault:claude-md", "WARN",
-                 "stale CLAUDE.md: " + "; ".join(reasons) + " — run `wiki doctor --fix`")
+    if bad:
+        reasons.append(f"broken symlink(s): {', '.join(bad)}")
+    return Check("vault:brain", "WARN",
+                 "brain: " + "; ".join(reasons) + " — run `wiki doctor --fix`")
 
 
 def _confirm_or_refuse(plan: str, *, yes: bool) -> bool:
@@ -185,9 +208,9 @@ def _confirm_or_refuse(plan: str, *, yes: bool) -> bool:
     return True
 
 
-def _backup_path(cfg: Config) -> Path:
-    """A non-clobbering CLAUDE.md.bak-<date>[-N] path in the vault."""
-    base = cfg.vault / f"CLAUDE.md.bak-{date.today().isoformat()}"
+def _backup_path(cfg: Config, name: str) -> Path:
+    """A non-clobbering <name>.bak-<date>[-N] path in the vault."""
+    base = cfg.vault / f"{name}.bak-{date.today().isoformat()}"
     cand, n = base, 2
     while cand.exists():
         cand = cfg.vault / f"{base.name}-{n}"
@@ -195,60 +218,73 @@ def _backup_path(cfg: Config) -> Path:
     return cand
 
 
-def _fix_claude_md(cfg: Config, checks: list[Check], *, yes: bool) -> int | None:
-    """Repair a stale CLAUDE.md. Stale *content* (version behind/absent) → back up
-    the old file and overwrite with the fresh template. Current version but
-    *missing sections* → append them. Returns 2 if refused without confirmation,
-    else None."""
-    cmd = next((c for c in checks if c.name == "vault:claude-md"), None)
+def _fix_brain(cfg: Config, checks: list[Check], *, yes: bool) -> int | None:
+    """Repair the maintainer brain in one pass: migrate a legacy CLAUDE.md to the
+    canonical AGENTS.md, refresh stale/incomplete AGENTS.md content (backup +
+    overwrite, or append missing sections), and (re)create the provider symlinks.
+    Returns 2 if refused without confirmation, else None."""
+    from wiki_daemon.scaffold import ensure_brain_link
+
+    cmd = next((c for c in checks if c.name == "vault:brain"), None)
     if cmd is None or cmd.status != "WARN":
         return None
-    text = cfg.claude_md.read_text(encoding="utf-8")
-
-    if _claude_md_is_stale(text):
-        plan = (f"will back up CLAUDE.md and overwrite it with template "
-                f"v{template_version()}")
-        if not _confirm_or_refuse(plan, yes=yes):
-            return None if sys.stdin.isatty() else 2  # declined=None, refused=2
-        backup = _backup_path(cfg)
-        backup.write_text(text, encoding="utf-8")
-        tmp = cfg.claude_md.with_suffix(cfg.claude_md.suffix + ".tmp")
-        tmp.write_text(template_text(), encoding="utf-8")
-        os.replace(tmp, cfg.claude_md)
-        print(f"backed up old CLAUDE.md -> {backup.name}; "
-              f"wrote template v{template_version()}")
-        return None
-
-    # current version, but a section was hand-removed: append it back.
-    new_text, added = apply_upgrade(text)
-    if not added:
-        return None
-    plan = f"will append {len(added)} CLAUDE.md section(s)"
-    if not _confirm_or_refuse(plan, yes=yes):
+    if not _confirm_or_refuse("will repair the maintainer brain "
+                              "(AGENTS.md + provider symlinks)", yes=yes):
         return None if sys.stdin.isatty() else 2  # declined=None, refused=2
-    tmp = cfg.claude_md.with_suffix(cfg.claude_md.suffix + ".tmp")
-    tmp.write_text(new_text, encoding="utf-8")
-    os.replace(tmp, cfg.claude_md)
-    names = ", ".join(h.removeprefix("## ") for h in added)
-    print(f"fixed: appended {len(added)} section(s) ({names})")
+
+    # 1) Migrate a legacy real CLAUDE.md → AGENTS.md (preserve content; back up).
+    if not cfg.agents_md.exists() and cfg.claude_md.exists() \
+            and not cfg.claude_md.is_symlink():
+        legacy = cfg.claude_md.read_text(encoding="utf-8")
+        backup = _backup_path(cfg, "CLAUDE.md")
+        backup.write_text(legacy, encoding="utf-8")
+        cfg.agents_md.write_text(legacy, encoding="utf-8")
+        cfg.claude_md.unlink()  # recreated as a symlink in step 3
+        print(f"migrated CLAUDE.md -> AGENTS.md (backup {backup.name})")
+
+    # 2) Refresh AGENTS.md content if it is behind the template.
+    if cfg.agents_md.exists():
+        text = cfg.agents_md.read_text(encoding="utf-8")
+        if _brain_is_stale(text):
+            backup = _backup_path(cfg, "AGENTS.md")
+            backup.write_text(text, encoding="utf-8")
+            cfg.agents_md.write_text(template_text(), encoding="utf-8")
+            print(f"backed up AGENTS.md -> {backup.name}; "
+                  f"wrote template v{template_version()}")
+        else:
+            new_text, added = apply_upgrade(text)
+            if added:
+                cfg.agents_md.write_text(new_text, encoding="utf-8")
+                names = ", ".join(h.removeprefix("## ") for h in added)
+                print(f"appended {len(added)} section(s) ({names})")
+
+    # 3) (Re)create provider symlinks → AGENTS.md (heals iCloud-broken links).
+    repaired = []
+    for name, link in cfg.brain_links.items():
+        before = link.is_symlink() and link.exists()
+        ensure_brain_link(link)
+        if not before:
+            repaired.append(name)
+    if repaired:
+        print(f"linked: {', '.join(repaired)} -> AGENTS.md")
     return None
 
 
 def run_doctor(cfg: Config, *, probe: Path | None = None, fix: bool = False,
                yes: bool = False, run=_run) -> int:
     checks: list[Check] = [check_environment()]
-    checks += check_tooling()
+    checks += check_tooling(cfg)
     if cfg.vault.exists():
         checks.append(check_auth(cfg))
     checks += check_vault(cfg)
     if cfg.vault.exists():
         checks.append(check_pinned(cfg, run))
-        cmd = check_claude_md(cfg)
+        cmd = check_brain(cfg)
         if cmd is not None:
             checks.append(cmd)
     if probe is not None:
         checks.append(probe_existing(probe))
-    elif cfg.vault.exists() and cfg.claude_md.exists():
+    elif cfg.vault.exists() and (cfg.agents_md.exists() or cfg.claude_md.exists()):
         tmp = cfg.vault / ".wiki-doctor-probe"
         try:
             tmp.write_text("probe", encoding="utf-8")
@@ -257,7 +293,7 @@ def run_doctor(cfg: Config, *, probe: Path | None = None, fix: bool = False,
             tmp.unlink(missing_ok=True)
     _print(checks)
     if fix:
-        override = _fix_claude_md(cfg, checks, yes=yes)
+        override = _fix_brain(cfg, checks, yes=yes)
         if override is not None:
             return override
     return 0 if overall_status(checks) != "FAIL" else 1

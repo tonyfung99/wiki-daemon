@@ -289,6 +289,7 @@ def _render_status(cfg: Config) -> str:
 
     lines = [
         f"daemon:     {daemon}",
+        f"provider:   {cfg.provider}",
         f"auth:       {auth}",
         f"queue:      {pending} pending{ingesting}",
         f"processed:  {processed} sources",

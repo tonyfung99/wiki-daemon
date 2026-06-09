@@ -44,6 +44,17 @@ class Config:
         return self.vault / "wiki" / "review"
 
     @property
+    def agents_md(self) -> Path:
+        """Canonical maintainer brain (vendor-neutral); provider files symlink here."""
+        return self.vault / "AGENTS.md"
+
+    @property
+    def brain_links(self) -> dict[str, Path]:
+        """Provider-specific brain filenames that symlink to AGENTS.md."""
+        return {"CLAUDE.md": self.vault / "CLAUDE.md",
+                "GEMINI.md": self.vault / "GEMINI.md"}
+
+    @property
     def claude_md(self) -> Path:
         return self.vault / "CLAUDE.md"
 
