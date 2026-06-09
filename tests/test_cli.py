@@ -841,3 +841,46 @@ def test_cmd_ingest_external_document_directs_to_import(tmp_path, monkeypatch, c
     assert rc == 2
     assert "import" in capsys.readouterr().err.lower()
     assert ext.exists()  # external file untouched
+
+
+# --- provider selection (2026-06-10) ---
+def test_provider_parser_and_resolution(tmp_path, monkeypatch):
+    import wiki_daemon.cli as cli
+    p = build_parser()
+    ns = p.parse_args(["status", "--vault", "/v", "--provider", "gemini"])
+    assert ns.provider == "gemini"
+    # default when absent
+    ns2 = p.parse_args(["status", "--vault", "/v"])
+    assert ns2.provider is None
+
+
+def test_config_resolves_provider_flag_env_default(tmp_path, monkeypatch):
+    import wiki_daemon.cli as cli
+    cfg0 = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    init_vault(cfg0)
+    monkeypatch.setattr(cli, "_config_path", lambda: tmp_path / "noconfig.toml")
+    monkeypatch.delenv("WIKI_PROVIDER", raising=False)
+    # flag wins
+    ns = build_parser().parse_args(["status", "--vault", str(cfg0.vault), "--provider", "codex"])
+    assert cli._config(ns).provider == "codex"
+    # env next
+    monkeypatch.setenv("WIKI_PROVIDER", "gemini")
+    ns2 = build_parser().parse_args(["status", "--vault", str(cfg0.vault)])
+    assert cli._config(ns2).provider == "gemini"
+    # default
+    monkeypatch.delenv("WIKI_PROVIDER", raising=False)
+    ns3 = build_parser().parse_args(["status", "--vault", str(cfg0.vault)])
+    assert cli._config(ns3).provider == "claude"
+
+
+def test_config_unknown_provider_errors(tmp_path, monkeypatch, capsys):
+    import wiki_daemon.cli as cli
+    cfg0 = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    init_vault(cfg0)
+    monkeypatch.setattr(cli, "_config_path", lambda: tmp_path / "noconfig.toml")
+    monkeypatch.delenv("WIKI_PROVIDER", raising=False)
+    ns = build_parser().parse_args(["status", "--vault", str(cfg0.vault), "--provider", "bogus"])
+    import pytest
+    with pytest.raises(SystemExit):
+        cli._config(ns)
+    assert "bogus" in capsys.readouterr().err.lower()

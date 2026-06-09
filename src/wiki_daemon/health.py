@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from wiki_daemon.claude import Runner, classify_failure, run_claude
+from wiki_daemon.agent import Runner, get_provider, run_agent
 from wiki_daemon.config import Config
 
 
@@ -16,20 +16,15 @@ class AuthResult:
 
 
 def probe_auth(cfg: Config, *, runner: Runner | None = None) -> AuthResult:
-    """Run a tiny `claude -p` probe and classify the outcome."""
+    """Run a tiny read-only probe through the configured provider and classify."""
+    provider = get_provider(cfg)
     kwargs = {} if runner is None else {"runner": runner}
-    res = run_claude(
-        prompt="Reply with exactly: ok",
-        cwd=cfg.vault,
-        allowed_tools=["Read"],
-        claude_bin=cfg.claude_bin,
-        timeout=60,
-        **kwargs,
-    )
+    res = run_agent(provider, "Reply with exactly: ok", cfg.vault,
+                    write=False, timeout=60, **kwargs)
     if res.ok:
         return AuthResult("ok", "authenticated")
     detail = (res.stderr or res.stdout or "no output").strip()[:160]
-    kind = classify_failure(res)
-    if kind == "auth":
+    kind = provider.classify_failure(res)
+    if kind in ("auth", "quota"):
         return AuthResult("auth_failed", detail)
     return AuthResult("unavailable", detail)

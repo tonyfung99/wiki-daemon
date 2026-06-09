@@ -186,7 +186,7 @@ def test_ingest_interactive_nonzero_not_processed(tmp_path):
     store = StateStore(cfg.processed_json)
 
     result = ingest_interactive(cfg, src, store=store, runner=lambda cmd, cwd: 1)
-    assert result.ok is False and result.kind == "claude_error"
+    assert result.ok is False and result.kind == "agent_error"
     from wiki_daemon.sources import read_source
     assert store.is_processed(read_source(src).sha256) is False
 

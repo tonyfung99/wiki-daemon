@@ -4,8 +4,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from wiki_daemon.claude import (
-    InteractiveRunner, Runner, classify_failure, run_claude, run_claude_interactive,
+from wiki_daemon.agent import (
+    InteractiveRunner, Runner, classify_failure, get_provider, run_agent,
+    run_agent_interactive,
 )
 from wiki_daemon.config import Config
 from wiki_daemon.frontmatter import parse
@@ -15,9 +16,6 @@ from wiki_daemon.prompts import (
 )
 from wiki_daemon.sources import read_source
 from wiki_daemon.state import StateStore
-
-_ALLOWED_TOOLS = ["Read", "Write", "Edit", "Glob", "Grep"]
-_READ_ONLY_TOOLS = ["Read", "Glob", "Grep"]
 
 
 @dataclass
@@ -129,16 +127,11 @@ def ingest(
 
     rel = source_path.relative_to(cfg.vault).as_posix()
     kwargs = {} if runner is None else {"runner": runner}
-    result = run_claude(
-        prompt=ingest_prompt(rel),
-        cwd=cfg.vault,
-        allowed_tools=_ALLOWED_TOOLS,
-        claude_bin=cfg.claude_bin,
-        **kwargs,
-    )
+    result = run_agent(
+        get_provider(cfg), ingest_prompt(rel), cfg.vault, write=True, **kwargs)
     if not result.ok:
         return IngestResult(ok=False, kind=classify_failure(result),
-                            reason=f"claude failed: {result.stderr[:200]}")
+                            reason=f"agent failed: {result.stderr[:200]}")
 
     ok, reason = _verify(cfg, rel)
     if not ok:
@@ -165,18 +158,14 @@ def ingest_interactive(
 
     rel = source_path.relative_to(cfg.vault).as_posix()
     kwargs = {} if runner is None else {"runner": runner}
-    code = run_claude_interactive(
-        prompt=ingest_prompt(rel, interactive=True),
-        cwd=cfg.vault,
-        allowed_tools=_ALLOWED_TOOLS,
-        claude_bin=cfg.claude_bin,
-        **kwargs,
-    )
+    code = run_agent_interactive(
+        get_provider(cfg), ingest_prompt(rel, interactive=True), cfg.vault,
+        write=True, **kwargs)
     if code != 0:
         # Interactive inherits stdio (no captured stderr), so we can't classify
         # auth/timeout the way headless ingest does — report a generic error.
-        return IngestResult(ok=False, kind="claude_error",
-                            reason=f"interactive claude exited {code}")
+        return IngestResult(ok=False, kind="agent_error",
+                            reason=f"interactive agent exited {code}")
     ok, reason = _verify(cfg, rel)
     if not ok:
         return IngestResult(ok=False, reason=reason, kind="verify_error")
@@ -199,15 +188,11 @@ def apply_clarification(cfg: Config, review_id: str, *,
 
     review_rel = item.path.relative_to(cfg.vault).as_posix()
     kwargs = {} if runner is None else {"runner": runner}
-    result = run_claude(
-        prompt=apply_clarification_prompt(review_rel),
-        cwd=cfg.vault,
-        allowed_tools=_ALLOWED_TOOLS,
-        claude_bin=cfg.claude_bin,
-        **kwargs,
-    )
+    result = run_agent(
+        get_provider(cfg), apply_clarification_prompt(review_rel), cfg.vault,
+        write=True, **kwargs)
     if not result.ok:
-        return ApplyResult(ok=False, reason=f"claude failed: {result.stderr[:200]}")
+        return ApplyResult(ok=False, reason=f"agent failed: {result.stderr[:200]}")
     if item.path.exists():
         return ApplyResult(ok=False, reason="review file not removed; not applied")
     return ApplyResult(ok=True)
@@ -217,18 +202,13 @@ def query(cfg: Config, question: str, *, save: bool = False,
           runner: Runner | None = None) -> QueryResult:
     """Answer a question from the wiki. Read-only by default; with save=True the
     maintainer also files the answer as a wiki/queries/ page (verified)."""
-    tools = _ALLOWED_TOOLS if save else _READ_ONLY_TOOLS
     kwargs = {} if runner is None else {"runner": runner}
-    result = run_claude(
-        prompt=query_prompt(question, save=save),
-        cwd=cfg.vault,
-        allowed_tools=tools,
-        claude_bin=cfg.claude_bin,
-        **kwargs,
-    )
+    result = run_agent(
+        get_provider(cfg), query_prompt(question, save=save), cfg.vault,
+        write=save, **kwargs)
     if not result.ok:
         return QueryResult(ok=False, kind=classify_failure(result),
-                           reason=f"claude failed: {result.stderr[:200]}")
+                           reason=f"agent failed: {result.stderr[:200]}")
     answer = result.stdout
     if not save:
         return QueryResult(ok=True, answer=answer)
@@ -240,25 +220,21 @@ def query(cfg: Config, question: str, *, save: bool = False,
 def lint_deep(cfg: Config, *, runner: Runner | None = None) -> LintScan:
     """Read-only LLM semantic scan: contradictions, stale claims, data gaps."""
     kwargs = {} if runner is None else {"runner": runner}
-    result = run_claude(
-        prompt=lint_prompt(), cwd=cfg.vault, allowed_tools=_READ_ONLY_TOOLS,
-        claude_bin=cfg.claude_bin, **kwargs,
-    )
+    result = run_agent(
+        get_provider(cfg), lint_prompt(), cfg.vault, write=False, **kwargs)
     if not result.ok:
         return LintScan(ok=False, kind=classify_failure(result),
-                        reason=f"claude failed: {result.stderr[:200]}")
+                        reason=f"agent failed: {result.stderr[:200]}")
     return LintScan(ok=True, report=result.stdout)
 
 
 def lint_repair(cfg: Config, findings_text: str, *, deep_report: str = "",
                 runner: Runner | None = None) -> ApplyResult:
-    """LLM repair pass (Write/Edit) that fixes the listed findings per CLAUDE.md."""
+    """LLM repair pass (Write/Edit) that fixes the listed findings."""
     kwargs = {} if runner is None else {"runner": runner}
-    result = run_claude(
-        prompt=lint_repair_prompt(findings_text, deep_report),
-        cwd=cfg.vault, allowed_tools=_ALLOWED_TOOLS,
-        claude_bin=cfg.claude_bin, **kwargs,
-    )
+    result = run_agent(
+        get_provider(cfg), lint_repair_prompt(findings_text, deep_report),
+        cfg.vault, write=True, **kwargs)
     if not result.ok:
-        return ApplyResult(ok=False, reason=f"claude failed: {result.stderr[:200]}")
+        return ApplyResult(ok=False, reason=f"agent failed: {result.stderr[:200]}")
     return ApplyResult(ok=True)

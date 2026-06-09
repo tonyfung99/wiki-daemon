@@ -41,6 +41,9 @@ def build_parser() -> argparse.ArgumentParser:
     # --vault is shared by every subcommand (e.g. `wiki init --vault <path>`).
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--vault", help="path to the vault", default=None)
+    common.add_argument("--provider", default=None,
+                        help="agentic CLI to drive: claude | gemini | codex "
+                             "(default claude; or WIKI_PROVIDER / config.toml)")
 
     ini = sub.add_parser("init", parents=[common],
                          help="scaffold a new vault (defaults to the current dir)")
@@ -110,10 +113,26 @@ def _config_path() -> Path:
     return Path(base) / "wiki" / "config.toml"
 
 
+def _resolve_provider(ns) -> str:
+    """Provider resolution chain: --provider flag → WIKI_PROVIDER env →
+    `provider` in config.toml → default 'claude'. Validates the name."""
+    from wiki_daemon.agent import PROVIDERS
+    from wiki_daemon.vault import read_config_provider
+    name = (getattr(ns, "provider", None) or os.environ.get("WIKI_PROVIDER")
+            or read_config_provider(_config_path()) or "claude")
+    if name not in PROVIDERS:
+        valid = ", ".join(sorted(PROVIDERS))
+        print(f"error: unknown provider {name!r} (valid: {valid})", file=sys.stderr)
+        raise SystemExit(2)
+    return name
+
+
 def _config(ns) -> Config:
+    provider = _resolve_provider(ns)
     # `init` CREATES a vault — target an explicit path or the current directory.
     if ns.command == "init":
-        return Config(vault=Path(ns.vault) if ns.vault else Path.cwd())
+        vault = Path(ns.vault) if ns.vault else Path.cwd()
+        return Config(vault=vault, provider=provider)
     # every other command DISCOVERS an existing vault via the resolution chain.
     from wiki_daemon.vault import VaultNotFound, resolve_vault
     try:
@@ -122,7 +141,7 @@ def _config(ns) -> Config:
     except VaultNotFound as exc:
         print(f"error: {exc}", file=sys.stderr)
         raise SystemExit(2)
-    return Config(vault=vault)
+    return Config(vault=vault, provider=provider)
 
 
 def cmd_init(cfg: Config, *, set_default: bool = False) -> int:

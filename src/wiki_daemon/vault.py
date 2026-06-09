@@ -39,6 +39,16 @@ def read_config_vault(config_path: Path) -> Path | None:
     return Path(v) if isinstance(v, str) and v.strip() else None
 
 
+def read_config_provider(config_path: Path) -> str | None:
+    """`provider` from the TOML config, or None (missing/malformed → None)."""
+    try:
+        data = tomllib.loads(Path(config_path).read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, tomllib.TOMLDecodeError):
+        return None
+    v = data.get("provider")
+    return v if isinstance(v, str) and v.strip() else None
+
+
 def write_config_vault(config_path: Path, vault: Path) -> None:
     """Record the absolute vault path as the config default (the only v1 key)."""
     p = Path(config_path)
