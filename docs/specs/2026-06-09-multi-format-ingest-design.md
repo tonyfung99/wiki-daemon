@@ -70,6 +70,20 @@ markitdown import so the rest of the package and tests have one seam.
   `raw/sources/<path.stem>.md` (via `_wrap_as_source`); move the original to
   `cfg.raw_originals / path.name`; return the new `.md` path.
 
+### `cli.py` — `wiki ingest <convertible>` parity (both daemon modes)
+`cmd_ingest` of a convertible path mirrors the daemon so conversion happens in
+either mode, without duplication:
+- The document must already be under `raw/sources/` (an external document →
+  error directing to `wiki import`, which converts + lands).
+- **Daemon on:** defer the original; the daemon converts it (its drain branch).
+- **Daemon off (no watcher):** `normalize_in_place` converts to a `.md` +
+  archives the original, then ingest that `.md` in-process under the lock. No
+  watcher means no second enqueue, so it ingests exactly once.
+
+`wiki import` already converts in the CLI process before the defer/ingest
+decision, so it works in both modes too (the daemon-off path does NOT rely on
+the watcher — it ingests the converted `.md` directly).
+
 ### `watcher.py`
 - `is_relevant` and `files_to_ingest` match `.md` OR `CONVERT_EXTENSIONS`. The
   watcher only watches `raw/sources/` (non-recursive), so `raw/originals/` is not

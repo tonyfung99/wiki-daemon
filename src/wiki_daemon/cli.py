@@ -10,7 +10,8 @@ from pathlib import Path
 from wiki_daemon import __version__
 from wiki_daemon import lint as lintmod
 from wiki_daemon.config import Config
-from wiki_daemon.importer import import_source
+from wiki_daemon.convert import CONVERT_EXTENSIONS
+from wiki_daemon.importer import import_source, normalize_in_place
 from wiki_daemon.ops import apply_clarification, ingest, ingest_interactive, query
 from wiki_daemon.ops import lint_deep, lint_repair
 from wiki_daemon.progress import source_state
@@ -181,8 +182,33 @@ def _ingest_locked(cfg: Config, path: Path, interactive: bool | None) -> int:
     return 1
 
 
+def _under_raw_sources(cfg: Config, path: Path) -> bool:
+    try:
+        path.resolve().relative_to(cfg.raw_sources.resolve())
+        return True
+    except ValueError:
+        return False
+
+
 def cmd_ingest(cfg: Config, file: str, *, interactive: bool | None = None) -> int:
     path = Path(file)
+    if path.suffix.lower() in CONVERT_EXTENSIONS:
+        # A document must already live in raw/sources/ to be ingested in place;
+        # external documents go through `wiki import` (which converts + lands).
+        if not _under_raw_sources(cfg, path):
+            print("ingest: documents must be brought in with `wiki import <file>`",
+                  file=sys.stderr)
+            return 2
+        # With a daemon, defer the original — the daemon converts it. Without one,
+        # convert in place to a .md, then ingest that (no watcher to double it).
+        if daemon_owns_vault(cfg):
+            return _defer_to_daemon(cfg, path, interactive)
+        try:
+            path = normalize_in_place(cfg, path)
+        except ValueError as exc:
+            print(f"ingest failed: {exc}", file=sys.stderr)
+            return 1
+        return _ingest_locked(cfg, path, interactive)
     if daemon_owns_vault(cfg):
         return _defer_to_daemon(cfg, path, interactive)
     return _ingest_locked(cfg, path, interactive)
