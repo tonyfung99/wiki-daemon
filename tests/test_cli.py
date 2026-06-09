@@ -805,3 +805,39 @@ def test_main_serve_passes_verbose(monkeypatch, tmp_path):
     monkeypatch.setattr(daemon, "serve", fake_serve)
     rc = main(["serve", "--vault", str(tmp_path), "--verbose"])
     assert rc == 0 and seen["verbose"] is True
+
+
+# --- ingest of a convertible normalizes (parity with daemon) (2026-06-09) ---
+def test_cmd_ingest_convertible_daemon_off_converts_then_ingests(tmp_path, monkeypatch):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    init_vault(cfg)
+    pdf = cfg.raw_sources / "report.pdf"
+    pdf.write_bytes(b"%PDF fake")
+    import wiki_daemon.cli as cli
+    import wiki_daemon.importer as imp
+    monkeypatch.setattr(cli, "daemon_owns_vault", lambda cfg: False)
+    monkeypatch.setattr(imp, "convert_to_markdown", lambda p: "# R\nbody\n")
+    ingested = []
+    def fake_ingest(cfg, path, *, store):
+        ingested.append(str(path))
+        from wiki_daemon.ops import IngestResult
+        return IngestResult(ok=True, kind="ok")
+    monkeypatch.setattr(cli, "ingest", fake_ingest)
+    rc = cli.cmd_ingest(cfg, str(pdf), interactive=False)
+    assert rc == 0
+    assert len(ingested) == 1 and ingested[0].endswith("report.md")  # converted md, not pdf
+    assert (cfg.raw_originals / "report.pdf").exists()   # original archived
+    assert not pdf.exists()
+
+
+def test_cmd_ingest_external_document_directs_to_import(tmp_path, monkeypatch, capsys):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    init_vault(cfg)
+    ext = tmp_path / "outside.pdf"
+    ext.write_bytes(b"%PDF")
+    import wiki_daemon.cli as cli
+    monkeypatch.setattr(cli, "daemon_owns_vault", lambda cfg: False)
+    rc = cli.cmd_ingest(cfg, str(ext), interactive=False)
+    assert rc == 2
+    assert "import" in capsys.readouterr().err.lower()
+    assert ext.exists()  # external file untouched
