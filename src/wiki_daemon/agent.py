@@ -100,21 +100,15 @@ def _gemini_interactive(p: Provider, prompt: str, write: bool) -> list[str]:
 
 
 def _codex_headless(p: Provider, prompt: str, write: bool) -> list[str]:
+    # `codex exec` is non-interactive (no approval prompt). --skip-git-repo-check
+    # lets it run in a non-git vault; the sandbox mode gates writes.
     sandbox = "workspace-write" if write else "read-only"
-    cmd = [p.bin, "exec", "--sandbox", sandbox]
-    if write:
-        cmd += ["--ask-for-approval", "never"]
-    cmd.append(prompt)
-    return cmd
+    return [p.bin, "exec", "--skip-git-repo-check", "--sandbox", sandbox, prompt]
 
 
 def _codex_interactive(p: Provider, prompt: str, write: bool) -> list[str]:
     sandbox = "workspace-write" if write else "read-only"
-    cmd = [p.bin, "--sandbox", sandbox]
-    if write:
-        cmd += ["--ask-for-approval", "never"]
-    cmd.append(prompt)
-    return cmd
+    return [p.bin, "--skip-git-repo-check", "--sandbox", sandbox, prompt]
 
 
 PROVIDERS: dict[str, Provider] = {
@@ -140,8 +134,11 @@ def get_provider(cfg) -> Provider:
 
 
 def _subprocess_runner(cmd: list[str], cwd: Path, timeout: int) -> tuple[int, str, str]:
+    # Close stdin (DEVNULL): headless agent CLIs like `codex exec` otherwise wait
+    # for "additional input from stdin" and hang/misbehave.
     proc = subprocess.run(cmd, cwd=str(cwd), timeout=timeout,
-                          capture_output=True, text=True)
+                          capture_output=True, text=True,
+                          stdin=subprocess.DEVNULL)
     return proc.returncode, proc.stdout, proc.stderr
 
 

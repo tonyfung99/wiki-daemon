@@ -31,9 +31,9 @@ def test_codex_headless_cmd_sandbox_modes():
     p = PROVIDERS["codex"]
     w = p.headless_cmd("PROMPT", write=True)
     assert w[0] == "codex" and "exec" in w and "PROMPT" in w
-    assert "workspace-write" in w and "never" in w
+    assert "workspace-write" in w and "--skip-git-repo-check" in w
     r = p.headless_cmd("PROMPT", write=False)
-    assert "read-only" in r
+    assert "read-only" in r and "--skip-git-repo-check" in r
 
 
 def test_brain_filenames():
