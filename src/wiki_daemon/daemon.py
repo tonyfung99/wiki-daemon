@@ -175,7 +175,9 @@ def _preflight_auth(
 
 
 def serve(cfg: Config, *, reconcile_interval: float = 300.0, tick: float = 2.0,
-          verbose: bool = False) -> int:
+          verbose: bool = False, no_api: bool = False,
+          api_port: int | None = None, api_bind: str | None = None,
+          config_path: Path | None = None) -> int:
     configure_logging(cfg, level=logging.DEBUG if verbose else logging.INFO)
     if not _preflight_auth(cfg):
         return 2
@@ -191,6 +193,17 @@ def serve(cfg: Config, *, reconcile_interval: float = 300.0, tick: float = 2.0,
     observer = Observer()
     observer.schedule(_Handler(cfg, q), str(cfg.raw_sources), recursive=False)
     observer.start()
+
+    api_server = None
+    if not no_api:
+        from wiki_daemon.api import start_api_server
+        from wiki_daemon.vault import read_config_api
+        api_cfg = read_config_api(config_path) if config_path else {}
+        host = api_bind or api_cfg.get("api_bind", "0.0.0.0")
+        port = api_port or api_cfg.get("api_port", 7880)
+        api_server = start_api_server(cfg, config_path=config_path or Path(),
+                                      host=host, port=port)
+
     _log.info("watching %s (reconcile every %ss)", cfg.raw_sources, reconcile_interval)
     last_reconcile = time.monotonic()
     consecutive = 0
@@ -218,6 +231,8 @@ def serve(cfg: Config, *, reconcile_interval: float = 300.0, tick: float = 2.0,
                 last_reconcile = time.monotonic()
             time.sleep(tick)
     finally:
+        if api_server is not None:
+            api_server.shutdown()
         observer.stop()
         observer.join()
         status.update(pid=None)

@@ -73,6 +73,12 @@ def build_parser() -> argparse.ArgumentParser:
     srv.add_argument("--reconcile-interval", type=float, default=300.0)
     srv.add_argument("--verbose", "-v", action="store_true",
                      help="log per-file watcher events (DEBUG)")
+    srv.add_argument("--no-api", action="store_true",
+                     help="disable the HTTP API server")
+    srv.add_argument("--api-port", type=int, default=None,
+                     help="API server port (default: 7880 or config.toml)")
+    srv.add_argument("--api-bind", default=None,
+                     help="API server bind address (default: 0.0.0.0 or config.toml)")
 
     rev = sub.add_parser("review", parents=[common],
                          help="list/accept/answer ingest clarifications")
@@ -538,7 +544,9 @@ def main(argv=None) -> int:
         # Lazy import: keeps watchdog/FSEvents out of the manual commands.
         from wiki_daemon import daemon
         return daemon.serve(cfg, reconcile_interval=ns.reconcile_interval,
-                            verbose=ns.verbose)
+                            verbose=ns.verbose, no_api=ns.no_api,
+                            api_port=ns.api_port, api_bind=ns.api_bind,
+                            config_path=_config_path())
     if ns.command == "review":
         if ns.review_cmd == "accept":
             return cmd_review_accept(cfg, ns.id)

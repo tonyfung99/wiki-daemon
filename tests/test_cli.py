@@ -154,13 +154,48 @@ def test_parser_has_serve_subcommand():
     assert ns.reconcile_interval == 10.0
 
 
+def test_serve_parser_has_api_flags():
+    p = build_parser()
+    ns = p.parse_args(["serve", "--vault", "/v"])
+    assert ns.no_api is False
+    assert ns.api_port is None
+    assert ns.api_bind is None
+    ns2 = p.parse_args(["serve", "--vault", "/v", "--no-api",
+                        "--api-port", "9000", "--api-bind", "127.0.0.1"])
+    assert ns2.no_api is True
+    assert ns2.api_port == 9000
+    assert ns2.api_bind == "127.0.0.1"
+
+
+def test_main_serve_passes_api_flags(monkeypatch, tmp_path):
+    import wiki_daemon.daemon as daemon
+    from wiki_daemon.cli import main
+    seen = {}
+
+    def fake_serve(cfg, *, reconcile_interval, verbose=False,
+                   no_api=False, api_port=None, api_bind=None,
+                   config_path=None):
+        seen.update(no_api=no_api, api_port=api_port, api_bind=api_bind)
+        return 0
+
+    monkeypatch.setattr(daemon, "serve", fake_serve)
+    rc = main(["serve", "--vault", str(tmp_path), "--no-api",
+               "--api-port", "9000", "--api-bind", "127.0.0.1"])
+    assert rc == 0
+    assert seen["no_api"] is True
+    assert seen["api_port"] == 9000
+    assert seen["api_bind"] == "127.0.0.1"
+
+
 def test_main_serve_dispatches_to_daemon(monkeypatch, tmp_path):
     import wiki_daemon.daemon as daemon
     from wiki_daemon.cli import main
 
     called = {}
 
-    def fake_serve(cfg, *, reconcile_interval, verbose=False):
+    def fake_serve(cfg, *, reconcile_interval, verbose=False,
+                   no_api=False, api_port=None, api_bind=None,
+                   config_path=None):
         called["ri"] = reconcile_interval
         return 0
 
@@ -799,7 +834,9 @@ def test_main_serve_passes_verbose(monkeypatch, tmp_path):
     import wiki_daemon.daemon as daemon
     from wiki_daemon.cli import main
     seen = {}
-    def fake_serve(cfg, *, reconcile_interval, verbose):
+    def fake_serve(cfg, *, reconcile_interval, verbose=False,
+                   no_api=False, api_port=None, api_bind=None,
+                   config_path=None):
         seen["verbose"] = verbose
         return 0
     monkeypatch.setattr(daemon, "serve", fake_serve)
