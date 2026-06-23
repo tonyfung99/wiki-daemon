@@ -153,6 +153,23 @@ wiki doctor          # validate tooling + iCloud + headless auth
 wiki serve           # run the daemon in the foreground (watch + auto-ingest)
 ```
 
+### API token management
+
+```bash
+wiki token generate     # create a token (prints it once — copy to the iOS app)
+wiki token show         # print the current token
+wiki token rotate       # replace the token with a new one
+```
+
+When starting `wiki serve` for a user who wants iOS app access:
+1. Check if a token exists: `wiki token show`
+2. If not, generate one: `wiki token generate`
+3. Tell the user to paste the token into the WikiReader app settings.
+4. Start the daemon: `wiki serve`
+
+The API server starts automatically when `wiki serve` runs. Use `--no-api` to
+disable it.
+
 ## Headless agent notes
 
 You have no terminal to answer prompts interactively, so:

@@ -159,10 +159,60 @@ export WIKI_VAULT="$VAULT"        # or set it once in your shell profile
 | `wiki review --vault <path>` | List open ingest clarifications. `wiki review answer <id> "…"` records your answer and applies it. |
 | `wiki doctor --vault <path> [--probe <file>] [--fix] [--yes]` | Validate environment, tooling, and iCloud handling on the host. Also flags a stale vault `CLAUDE.md` (missing maintainer sections); `--fix` repairs it by appending the missing sections (`--yes` skips the prompt). |
 | `wiki serve --vault <path> [--reconcile-interval N] [--verbose]` | Run the daemon: watch `raw/sources/` and ingest autonomously. Logs lifecycle events (startup, `ingesting`/`ingested` per file, deferred not-ready files, reconcile sweeps) to stdout + `daemon.log`; `--verbose` adds per-file watcher (`detected`) events at DEBUG. |
+| `wiki token {generate\|show\|rotate}` | Manage the API bearer token for WikiReader / external clients. `generate` creates and prints a new token, `show` prints the current one, `rotate` replaces it. |
 
 The vault's `CLAUDE.md` is the **maintainer brain** — it defines the page
 templates, naming, and the ingest algorithm `claude -p` follows. Tune it to
 change how your wiki is built.
+
+## HTTP API
+
+`wiki serve` includes an HTTP API server that lets [WikiReader](https://github.com/tonyfung99/WikiReader)
+(or any client) query the wiki vault over the network.
+
+### Setup
+
+```bash
+# 1. Generate an API token.
+wiki token generate
+# prints: wk_a1b2c3...  (copy this into the WikiReader app settings)
+
+# 2. Start the daemon (API starts automatically).
+wiki serve --vault "$VAULT"
+# logs: api: listening on 0.0.0.0:7880
+```
+
+The API binds to `0.0.0.0:7880` by default. Configure in
+`~/.config/wiki/config.toml`:
+
+```toml
+api_token = "wk_..."       # managed by `wiki token`
+api_port = 7880             # default
+api_bind = "0.0.0.0"        # default
+```
+
+Or override with `--api-port` / `--api-bind` on `wiki serve`.
+
+### Endpoints
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| `GET`  | `/api/v1/health` | No | Connection test — version, vault, provider status |
+| `POST` | `/api/v1/query` | Yes | Start a query job (returns `jobId` immediately) |
+| `GET`  | `/api/v1/query/{jobId}` | Yes | Poll for query result |
+
+Queries are **async**: POST returns a `jobId`, poll GET until `status` is `done`
+or `failed`. Answers are returned as Markdown with `[[wiki-link]]` citations
+extracted into a structured `citations` array.
+
+### Private network access
+
+The daemon runs on your home machine. To reach it from WikiReader on iOS:
+
+- **[Tailscale](https://tailscale.com)** (recommended): install on both devices,
+  connect to the same tailnet, use the Mac's Tailscale IP as the daemon URL.
+- **LAN**: use the Mac's local IP (same Wi-Fi network).
+- **Disable with `--no-api`** if you don't need the HTTP server.
 
 ## How it works (briefly)
 
@@ -240,8 +290,8 @@ On first use the skill records your vault as the `wiki` default
 
 ## Status
 
-M1 + M2 (autonomous ingest) are implemented and tested; ingest is validated
-against the real LLM. Query / HTTP API / hermes integration (M3) and lint / iOS
+M1 + M2 (autonomous ingest) and M3 (query / HTTP API / hermes integration) are
+implemented and tested; ingest is validated against the real LLM. Lint / iOS
 querying (M4–M5) are planned — see the design doc.
 
 ## License
