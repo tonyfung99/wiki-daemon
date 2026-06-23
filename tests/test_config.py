@@ -28,3 +28,10 @@ def test_review_path_under_wiki(tmp_path):
     from wiki_daemon.config import Config
     cfg = Config(vault=tmp_path)
     assert cfg.review == tmp_path / "wiki" / "review"
+
+
+def test_config_api_defaults():
+    cfg = Config(vault="/tmp/v")
+    assert cfg.api_token is None
+    assert cfg.api_port == 7880
+    assert cfg.api_bind == "0.0.0.0"

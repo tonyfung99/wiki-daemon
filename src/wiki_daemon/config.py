@@ -17,6 +17,9 @@ class Config:
     state_root: Path = field(default_factory=_default_state_root)
     claude_bin: str = "claude"
     provider: str = "claude"   # which agentic CLI: claude | gemini | codex
+    api_token: str | None = None
+    api_port: int = 7880
+    api_bind: str = "0.0.0.0"
 
     def __post_init__(self) -> None:
         self.vault = Path(self.vault).expanduser().resolve()

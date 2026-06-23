@@ -4,7 +4,8 @@ import pytest
 from pathlib import Path
 from wiki_daemon.vault import (
     VaultNotFound, is_vault, find_vault_upward, read_config_vault,
-    write_config_vault, resolve_vault,
+    write_config_vault, resolve_vault, read_config_token, write_config_token,
+    read_config_api,
 )
 
 
@@ -116,3 +117,50 @@ def test_resolve_whitespace_env_falls_through_to_discovery(tmp_path):
     got = resolve_vault(None, env="   ", start_dir=v / "wiki",
                         config_path=tmp_path / "c.toml")
     assert got == v.resolve()
+
+
+def test_read_config_token_missing_file(tmp_path):
+    assert read_config_token(tmp_path / "nope.toml") is None
+
+
+def test_read_config_token_present(tmp_path):
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('api_token = "wk_abc123"\n', encoding="utf-8")
+    assert read_config_token(cfg) == "wk_abc123"
+
+
+def test_write_config_token_creates(tmp_path):
+    cfg = tmp_path / "config.toml"
+    write_config_token(cfg, "wk_new")
+    assert read_config_token(cfg) == "wk_new"
+
+
+def test_write_config_token_preserves_other_keys(tmp_path):
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('default_vault = "/v"\nprovider = "gemini"\n', encoding="utf-8")
+    write_config_token(cfg, "wk_new")
+    text = cfg.read_text(encoding="utf-8")
+    assert 'default_vault = "/v"' in text
+    assert 'provider = "gemini"' in text
+    assert 'api_token = "wk_new"' in text
+
+
+def test_write_config_token_replaces_existing(tmp_path):
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('api_token = "wk_old"\n', encoding="utf-8")
+    write_config_token(cfg, "wk_new")
+    assert read_config_token(cfg) == "wk_new"
+    assert "wk_old" not in cfg.read_text(encoding="utf-8")
+
+
+def test_read_config_api(tmp_path):
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('api_port = 9000\napi_bind = "127.0.0.1"\n', encoding="utf-8")
+    d = read_config_api(cfg)
+    assert d["api_port"] == 9000
+    assert d["api_bind"] == "127.0.0.1"
+
+
+def test_read_config_api_defaults_on_missing(tmp_path):
+    d = read_config_api(tmp_path / "nope.toml")
+    assert d == {}
