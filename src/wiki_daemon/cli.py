@@ -105,6 +105,12 @@ def build_parser() -> argparse.ArgumentParser:
                      help="repair findings (deletes conflict-dupes + LLM repair pass)")
     lnt.add_argument("--yes", action="store_true",
                      help="skip the confirmation prompt for --fix")
+
+    tok = sub.add_parser("token", help="manage the API bearer token")
+    tok_sub = tok.add_subparsers(dest="token_cmd")
+    tok_sub.add_parser("generate", help="generate a new token and save it")
+    tok_sub.add_parser("show", help="print the current token")
+    tok_sub.add_parser("rotate", help="replace the current token with a new one")
     return p
 
 
@@ -473,12 +479,46 @@ def cmd_query(cfg: Config, question: str, *, save: bool = False) -> int:
     return 0
 
 
+def cmd_token(token_cmd: str) -> int:
+    import secrets
+    from wiki_daemon.vault import read_config_token, write_config_token
+
+    config_path = _config_path()
+    if token_cmd == "generate":
+        existing = read_config_token(config_path)
+        if existing:
+            print("token already exists — use `wiki token rotate` to replace",
+                  file=sys.stderr)
+            return 1
+        token = f"wk_{secrets.token_hex(16)}"
+        write_config_token(config_path, token)
+        print(token)
+        return 0
+    if token_cmd == "show":
+        token = read_config_token(config_path)
+        if not token:
+            print("no token configured — run `wiki token generate`",
+                  file=sys.stderr)
+            return 1
+        print(token)
+        return 0
+    if token_cmd == "rotate":
+        token = f"wk_{secrets.token_hex(16)}"
+        write_config_token(config_path, token)
+        print(token)
+        return 0
+    print("usage: wiki token {generate|show|rotate}", file=sys.stderr)
+    return 2
+
+
 def main(argv=None) -> int:
     parser = build_parser()
     ns = parser.parse_args(argv)
     if ns.command is None:
         parser.print_help()
         return 0
+    if ns.command == "token":
+        return cmd_token(ns.token_cmd)
     cfg = _config(ns)
     if ns.command == "init":
         return cmd_init(cfg, set_default=ns.set_default)
