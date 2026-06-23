@@ -11,7 +11,7 @@ import time as _time
 import tomllib
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import HTTPServer, BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from wiki_daemon import __version__
@@ -302,7 +302,7 @@ def start_api_server(cfg: Config, *, config_path: Path,
     Handler.job_store = store
     Handler.query_fn = staticmethod(qfn)
 
-    server = HTTPServer((host, port), Handler)
+    server = ThreadingHTTPServer((host, port), Handler)
     t = threading.Thread(target=server.serve_forever, daemon=True)
     t.start()
     _log.info("api: listening on %s:%d", host, server.server_address[1])
