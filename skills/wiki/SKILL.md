@@ -187,6 +187,10 @@ You have no terminal to answer prompts interactively, so:
 - **`auth: FAILING` in `wiki status`** — headless `claude -p` auth is separate
   from interactive Claude. Fix with `claude setup-token`. Interactive Claude
   working does **not** mean headless works.
+- **`quota` failure in `wiki status`** — Claude hit its usage limit or ran out
+  of credits (`usage credits required`, `402`). Check your plan at
+  `claude.ai/settings`. The failure kind is `quota` (not `error`) so the daemon
+  will retry it like a transient outage rather than giving up permanently.
 - **Nothing ingesting** — run `wiki status` and check queue depth + last error.
   The source must be a `*.md` file under `raw/sources/`.
 - **Vault not found** — if you skipped the set-default step, pass

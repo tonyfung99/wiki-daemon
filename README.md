@@ -230,7 +230,10 @@ The daemon runs on your home machine. To reach it from WikiReader on iOS:
   `claude setup-token` for an unattended daemon) and flags a stale vault
   `CLAUDE.md` whose maintainer sections lag the current template
   (`wiki doctor --fix` appends the missing ones, since `wiki init` never
-  overwrites an existing brain).
+  overwrites an existing brain). Ingest failures are classified as `auth`
+  (bad token), `quota` (usage-limit / payment-required / 402), `unavailable`
+  (provider down), or `error` (other); the full reason includes both stdout and
+  stderr so Codex-style providers that write diagnostics to stdout are captured.
 - **Clarifications** = when a structural decision is ambiguous, an interactive
   ingest asks you live; otherwise (scripts, the daemon) the maintainer files an
   open question under `wiki/review/`. Resolve later with `wiki review` and
