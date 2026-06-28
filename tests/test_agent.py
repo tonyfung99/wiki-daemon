@@ -52,6 +52,44 @@ def test_classify_failure_buckets():
     assert p.classify_failure(AgentResult(False, 1, "", "some other boom")) == "error"
 
 
+def test_classify_failure_quota_claude_usage_credits():
+    # "Usage credits required for 1M context" — real Claude error seen in the wild
+    p = PROVIDERS["claude"]
+    assert p.classify_failure(AgentResult(False, 1, "", "Usage credits required for 1M context")) == "quota"
+    assert p.classify_failure(AgentResult(False, 1, "", "usage limit exceeded")) == "quota"
+    assert p.classify_failure(AgentResult(False, 1, "", "402 payment required")) == "quota"
+
+
+def test_classify_failure_checks_stdout_not_just_stderr():
+    # Codex puts its diagnostics in stdout; classification must scan both streams
+    p = PROVIDERS["codex"]
+    assert p.classify_failure(AgentResult(False, 1, "not logged in\n", "")) == "auth"
+    assert p.classify_failure(AgentResult(False, 1, "usage credits required\n", "")) == "quota"
+
+
+def test_ingest_reason_captures_stdout_when_stderr_empty():
+    import tempfile, pathlib
+    from wiki_daemon.ops import ingest
+    from wiki_daemon.state import StateStore
+    from wiki_daemon.config import Config
+
+    with tempfile.TemporaryDirectory() as tmp:
+        vault = pathlib.Path(tmp)
+        (vault / "raw" / "sources").mkdir(parents=True)
+        src = vault / "raw" / "sources" / "x.md"
+        src.write_text("# X\n")
+
+        cfg = Config(vault=vault)
+
+        def bad_runner(cmd, cwd, timeout):
+            return 1, "stdout-only error detail", ""
+
+        store = StateStore(cfg.processed_json)
+        result = ingest(cfg, src, store=store, runner=bad_runner)
+        assert not result.ok
+        assert "stdout-only error detail" in result.reason
+
+
 # --- run_agent dispatches through the injectable runner ---
 def test_run_agent_invokes_runner_and_wraps_result():
     p = PROVIDERS["gemini"]

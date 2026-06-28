@@ -28,7 +28,8 @@ _READ_TOOLS = ["Read", "Glob", "Grep"]
 _AUTH_SIGNS = ("401", "authenticate", "credentials", "invalid authentication",
                "unauthorized", "not logged in")
 _QUOTA_SIGNS = ("rate limit", "quota", "exhausted", "429", "resource_exhausted",
-                "overloaded", "too many requests")
+                "overloaded", "too many requests", "usage credits", "usage limit",
+                "402", "payment required")
 
 
 @dataclass

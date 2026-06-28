@@ -131,7 +131,7 @@ def ingest(
         get_provider(cfg), ingest_prompt(rel), cfg.vault, write=True, **kwargs)
     if not result.ok:
         return IngestResult(ok=False, kind=classify_failure(result),
-                            reason=f"agent failed: {result.stderr[:200]}")
+                            reason=f"agent failed: {(result.stdout + result.stderr).strip()[:300]}")
 
     ok, reason = _verify(cfg, rel)
     if not ok:
@@ -208,7 +208,7 @@ def query(cfg: Config, question: str, *, save: bool = False,
         write=save, **kwargs)
     if not result.ok:
         return QueryResult(ok=False, kind=classify_failure(result),
-                           reason=f"agent failed: {result.stderr[:200]}")
+                           reason=f"agent failed: {(result.stdout + result.stderr).strip()[:300]}")
     answer = result.stdout
     if not save:
         return QueryResult(ok=True, answer=answer)
@@ -224,7 +224,7 @@ def lint_deep(cfg: Config, *, runner: Runner | None = None) -> LintScan:
         get_provider(cfg), lint_prompt(), cfg.vault, write=False, **kwargs)
     if not result.ok:
         return LintScan(ok=False, kind=classify_failure(result),
-                        reason=f"agent failed: {result.stderr[:200]}")
+                        reason=f"agent failed: {(result.stdout + result.stderr).strip()[:300]}")
     return LintScan(ok=True, report=result.stdout)
 
 
