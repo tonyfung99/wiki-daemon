@@ -1,4 +1,8 @@
 """Tests for agent.py — the pluggable agentic-CLI provider abstraction."""
+import logging
+from pathlib import Path
+from types import SimpleNamespace
+
 import pytest
 
 from wiki_daemon.agent import (
@@ -100,6 +104,45 @@ def test_run_agent_invokes_runner_and_wraps_result():
     res = run_agent(p, "hi", cwd="/tmp", write=True, runner=fake_runner)
     assert isinstance(res, AgentResult) and res.ok and res.stdout == "done"
     assert seen["cmd"][0] == "gemini" and "--yolo" in seen["cmd"]
+
+
+def test_run_agent_materializes_cwd_before_running():
+    # The vault tree must be materialized (iCloud) before codex scans it.
+    p = PROVIDERS["codex"]
+    order = []
+
+    def spy_materialize(root):
+        order.append(("materialize", root))
+        return SimpleNamespace(timed_out=False, still_dataless=0)
+
+    def fake_runner(cmd, cwd, timeout):
+        order.append(("run", cwd))
+        return 0, "ok", ""
+
+    res = run_agent(p, "hi", cwd="/vault", write=False,
+                    runner=fake_runner, materialize_fn=spy_materialize)
+    assert res.ok
+    assert order[0] == ("materialize", Path("/vault"))   # before the run
+    assert order[1][0] == "run"
+
+
+def test_run_agent_noop_materialize_preserves_behavior():
+    p = PROVIDERS["gemini"]
+    res = run_agent(p, "hi", cwd="/tmp", write=True,
+                    runner=lambda cmd, cwd, timeout: (0, "done", ""),
+                    materialize_fn=lambda root: None)
+    assert res.ok and res.stdout == "done"
+
+
+def test_run_agent_warns_when_materialize_times_out(caplog):
+    p = PROVIDERS["codex"]
+    report = SimpleNamespace(timed_out=True, still_dataless=3,
+                             scanned=5, materialized=0)
+    with caplog.at_level(logging.WARNING, logger="wiki_daemon.agent"):
+        run_agent(p, "hi", cwd="/vault", write=False,
+                  runner=lambda cmd, cwd, timeout: (0, "ok", ""),
+                  materialize_fn=lambda root: report)
+    assert any("dataless" in r.message.lower() for r in caplog.records)
 
 
 def test_run_agent_missing_binary_is_unavailable():
