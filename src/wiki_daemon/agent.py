@@ -147,22 +147,28 @@ def _subprocess_runner(cmd: list[str], cwd: Path, timeout: int) -> tuple[int, st
     # (we found codex fs-helpers alive for days) and leaving the pipe open. On
     # timeout we SIGKILL the process group, drain the now-closable pipes, then
     # re-raise so run_agent's handler maps it to a timeout AgentResult.
-    proc = subprocess.Popen(cmd, cwd=str(cwd),
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            text=True, stdin=subprocess.DEVNULL,
-                            start_new_session=True)
-    try:
-        out, err = proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        # start_new_session makes the child a group leader, so its group id is
-        # its pid; kill the group by pid (the group outlives a leader that has
-        # already exited, as long as a grandchild still holds it).
+    with subprocess.Popen(cmd, cwd=str(cwd),
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          text=True, stdin=subprocess.DEVNULL,
+                          start_new_session=True) as proc:
         try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass  # whole tree already gone
-        proc.communicate()
-        raise
+            out, err = proc.communicate(timeout=timeout)
+        except BaseException:
+            # On ANY failure (timeout, KeyboardInterrupt, read error) kill the
+            # whole tree so nothing is orphaned. start_new_session makes the
+            # child a group leader, so its group id is its pid; kill by pid (the
+            # group outlives a leader that already exited, as long as a
+            # grandchild still holds it).
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass  # whole tree already gone
+            try:
+                proc.communicate(timeout=5)  # bounded drain of the closed pipes
+            except subprocess.TimeoutExpired:
+                pass  # a descendant escaped the group; accept an FD leak over a
+                      # permanent hang (the tree is already SIGKILLed)
+            raise
     return proc.returncode, out, err
 
 
