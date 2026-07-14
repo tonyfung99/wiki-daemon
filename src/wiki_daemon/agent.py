@@ -12,17 +12,24 @@ The runner is injectable for testing (no real CLI is spawned in unit tests).
 """
 from __future__ import annotations
 
+import logging
 import os
 import signal
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
+
+from . import icloud
+
+logger = logging.getLogger("wiki_daemon.agent")
 
 # runner(cmd, cwd, timeout) -> (returncode, stdout, stderr)
 Runner = Callable[[list[str], Path, int], tuple[int, str, str]]
 # interactive runner(cmd, cwd) -> returncode (stdio inherited, no capture)
 InteractiveRunner = Callable[[list[str], Path], int]
+# materialize(cwd) -> report; readies an iCloud vault before the agent scans it
+MaterializeFn = Callable[[Path], Any]
 
 _WRITE_TOOLS = ["Read", "Write", "Edit", "Glob", "Grep"]
 _READ_TOOLS = ["Read", "Glob", "Grep"]
@@ -173,7 +180,22 @@ def _subprocess_runner(cmd: list[str], cwd: Path, timeout: int) -> tuple[int, st
 
 
 def run_agent(provider: Provider, prompt: str, cwd, *, write: bool,
-              timeout: int = 300, runner: Runner = _subprocess_runner) -> AgentResult:
+              timeout: int = 300, runner: Runner = _subprocess_runner,
+              materialize_fn: MaterializeFn = icloud.ensure_tree_materialized) -> AgentResult:
+    # The agent CLI scans cwd on startup; an iCloud-evicted (dataless) file there
+    # EINTRs and aborts the run. Materialize the whole tree first. Bounded and
+    # best-effort: if it times out with files still dataless, log and proceed
+    # (the run will fail gracefully via the existing timeout handling).
+    try:
+        report = materialize_fn(Path(cwd))
+    except Exception:  # materialize is best-effort; never let it fail the run
+        logger.warning("materialize failed before agent run in %s", cwd, exc_info=True)
+        report = None
+    if report is not None and getattr(report, "timed_out", False) \
+            and getattr(report, "still_dataless", 0):
+        logger.warning(
+            "materialize incomplete before agent run in %s: %s files still dataless",
+            cwd, report.still_dataless)
     cmd = provider.headless_cmd(prompt, write=write)
     try:
         code, out, err = runner(cmd, Path(cwd), timeout)
