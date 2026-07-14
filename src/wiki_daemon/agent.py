@@ -12,6 +12,8 @@ The runner is injectable for testing (no real CLI is spawned in unit tests).
 """
 from __future__ import annotations
 
+import os
+import signal
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -137,10 +139,37 @@ def get_provider(cfg) -> Provider:
 def _subprocess_runner(cmd: list[str], cwd: Path, timeout: int) -> tuple[int, str, str]:
     # Close stdin (DEVNULL): headless agent CLIs like `codex exec` otherwise wait
     # for "additional input from stdin" and hang/misbehave.
-    proc = subprocess.run(cmd, cwd=str(cwd), timeout=timeout,
-                          capture_output=True, text=True,
-                          stdin=subprocess.DEVNULL)
-    return proc.returncode, proc.stdout, proc.stderr
+    #
+    # start_new_session=True puts the child in its own process group so a timeout
+    # can kill the WHOLE tree. Agent CLIs (e.g. `codex exec --sandbox
+    # workspace-write`) spawn grandchildren that inherit the stdout pipe; the
+    # stdlib timeout path SIGKILLs only the direct child, orphaning grandchildren
+    # (we found codex fs-helpers alive for days) and leaving the pipe open. On
+    # timeout we SIGKILL the process group, drain the now-closable pipes, then
+    # re-raise so run_agent's handler maps it to a timeout AgentResult.
+    with subprocess.Popen(cmd, cwd=str(cwd),
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          text=True, stdin=subprocess.DEVNULL,
+                          start_new_session=True) as proc:
+        try:
+            out, err = proc.communicate(timeout=timeout)
+        except BaseException:
+            # On ANY failure (timeout, KeyboardInterrupt, read error) kill the
+            # whole tree so nothing is orphaned. start_new_session makes the
+            # child a group leader, so its group id is its pid; kill by pid (the
+            # group outlives a leader that already exited, as long as a
+            # grandchild still holds it).
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass  # whole tree already gone
+            try:
+                proc.communicate(timeout=5)  # bounded drain of the closed pipes
+            except subprocess.TimeoutExpired:
+                pass  # a descendant escaped the group; accept an FD leak over a
+                      # permanent hang (the tree is already SIGKILLed)
+            raise
+    return proc.returncode, out, err
 
 
 def run_agent(provider: Provider, prompt: str, cwd, *, write: bool,

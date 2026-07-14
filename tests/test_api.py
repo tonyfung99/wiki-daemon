@@ -349,6 +349,48 @@ def test_query_provider_failure(tmp_path):
         server.shutdown()
 
 
+# --- running deadline (wedged worker) ---
+
+def test_query_running_past_deadline_returns_failed_timeout(tmp_path):
+    """A job stuck 'running' past the deadline is reported failed/timeout."""
+    import threading as _t
+    from wiki_daemon.ops import QueryResult
+
+    gate = _t.Event()
+
+    def blocking_query(cfg, question, *, save):
+        gate.wait(10)
+        return QueryResult(ok=True, answer="late answer")
+
+    base, server, _ = _api(tmp_path, query_fn=blocking_query)
+    try:
+        resp = _post(f"{base}/api/v1/query", {"question": "Q?", "save": False})
+        job_id = json.loads(resp.read())["jobId"]
+
+        # While it is still running, it reports "running".
+        data = json.loads(_get(f"{base}/api/v1/query/{job_id}").read())
+        assert data["status"] == "running"
+
+        # Make it appear to have been running past the deadline by winding
+        # the monotonic start time backwards (older than the deadline, but
+        # still younger than the store expiry so it is not evicted → 404).
+        store = server.RequestHandlerClass.job_store
+        job = store.get(job_id)
+        job.created -= 500.0
+
+        data = json.loads(_get(f"{base}/api/v1/query/{job_id}").read())
+        assert data["status"] == "failed"
+        assert data["ok"] is False
+        assert data["error"]["code"] == "provider_failed"
+        assert data["error"]["details"]["kind"] == "timeout"
+        assert data["error"]["details"]["provider"] == "claude"
+        assert data["error"]["retryable"] is True
+        assert "time" in data["error"]["message"].lower()
+    finally:
+        gate.set()
+        server.shutdown()
+
+
 # --- not found ---
 
 def test_query_get_unknown_job_returns_404(tmp_path):

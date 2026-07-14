@@ -23,6 +23,15 @@ _log = logging.getLogger("wiki_daemon.api")
 
 _WIKI_LINK_RE = re.compile(r"\[\[([^\[\]\|]+?)(?:\|([^\[\]]+?))?\]\]")
 
+# Server-side deadline: once a query job has been "running" longer than this,
+# GET reports it as a failed timeout instead of an eternal "running" (defense
+# against a wedged worker that never calls JobStore.complete()). Must sit
+# strictly between the agent subprocess timeout (300s) and the JobStore expiry
+# (600s): > 300 so a normal slow query is never failed early, < 600 so the
+# client receives this failed response before the job is evicted (which would
+# otherwise surface a confusing 404).
+QUERY_RUNNING_DEADLINE_SECONDS = 420.0
+
 
 def extract_citations(markdown: str) -> list[dict]:
     seen: set[str] = set()
@@ -253,6 +262,21 @@ class ApiHandler(BaseHTTPRequestHandler):
             "status": job.status,
         }
         if job.status == "running":
+            if _time.monotonic() - job.created > QUERY_RUNNING_DEADLINE_SECONDS:
+                # Wedged worker: synthesize a terminal failed/timeout response
+                # so the client stops polling. The stored job is left as-is; if
+                # the worker ever completes, a later GET reflects its real
+                # result.
+                body["status"] = "failed"
+                body["ok"] = False
+                body["error"] = {
+                    "code": "provider_failed",
+                    "message": "Query exceeded the time limit and was abandoned.",
+                    "retryable": True,
+                    "details": {"kind": "timeout", "provider": self.cfg.provider},
+                }
+                self._send_json(200, body)
+                return
             self._send_json(200, body)
             return
         if job.status == "done":
