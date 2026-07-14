@@ -1,8 +1,13 @@
 """Tests for agent.py — the pluggable agentic-CLI provider abstraction."""
+import os
+import subprocess
+import time
+
 import pytest
 
 from wiki_daemon.agent import (
     AgentResult, get_provider, run_agent, run_agent_interactive, PROVIDERS,
+    _subprocess_runner,
 )
 
 
@@ -88,6 +93,57 @@ def test_ingest_reason_captures_stdout_when_stderr_empty():
         result = ingest(cfg, src, store=store, runner=bad_runner)
         assert not result.ok
         assert "stdout-only error detail" in result.reason
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+# --- _subprocess_runner kills the whole process tree on timeout ---
+def test_subprocess_runner_timeout_kills_grandchild(tmp_path):
+    # The direct `sh` exits immediately, but forks a background `sleep 30`
+    # grandchild that inherits the captured stdout pipe (mirrors codex's
+    # `--codex-run-as-fs-helper` grandchild). subprocess.run's kill() reaps only
+    # the direct child, so the grandchild is orphaned and lives on (we found
+    # such codex orphans alive for days). The fix launches the child in its own
+    # session and kills the whole process group on timeout, so the grandchild
+    # dies too. The grandchild records its PID so the test can check it.
+    pidfile = tmp_path / "grandchild.pid"
+    cmd = ["sh", "-c", f"sleep 30 & echo $! > {pidfile}; exit 0"]
+
+    start = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        _subprocess_runner(cmd, tmp_path, timeout=1)
+    elapsed = time.monotonic() - start
+    assert elapsed < 8, f"runner blocked {elapsed:.1f}s; process tree not killed"
+
+    gpid = int(pidfile.read_text().strip())
+    try:
+        # Killing the group is async; allow a brief bounded window for reaping.
+        deadline = time.monotonic() + 3
+        while _alive(gpid) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert not _alive(gpid), f"grandchild {gpid} survived timeout (orphan leak)"
+    finally:
+        if _alive(gpid):
+            os.kill(gpid, 9)  # don't leak the sleep if the assertion failed
+
+
+def test_subprocess_runner_normal_command_returns_output(tmp_path):
+    # A fast, normal command returns real returncode + captured stdout unchanged.
+    code, out, err = _subprocess_runner(["sh", "-c", "echo hello"], tmp_path, timeout=10)
+    assert code == 0
+    assert out.strip() == "hello"
+    assert err == ""
+
+
+def test_subprocess_runner_nonzero_returncode_preserved(tmp_path):
+    code, out, err = _subprocess_runner(["sh", "-c", "exit 3"], tmp_path, timeout=10)
+    assert code == 3
 
 
 # --- run_agent dispatches through the injectable runner ---
