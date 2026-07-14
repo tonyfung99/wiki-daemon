@@ -161,11 +161,14 @@ def ensure_tree_materialized(
 
     remaining = dataless
     timed_out = True
-    for _ in range(max_polls):
+    for i in range(max_polls):
         _scanned, remaining = _count_dataless(root, stat_fn, walk_fn)
         if remaining == 0:
             timed_out = False
             break
-        sleep_fn(interval)
+        if i < max_polls - 1:  # no point sleeping right before we give up
+            sleep_fn(interval)
 
-    return MaterializeReport(scanned, dataless - remaining, remaining, timed_out)
+    # clamp: a file re-evicted between walks must not yield a negative count
+    materialized = max(0, dataless - remaining)
+    return MaterializeReport(scanned, materialized, remaining, timed_out)

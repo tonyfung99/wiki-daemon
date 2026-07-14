@@ -157,7 +157,11 @@ def run_agent(provider: Provider, prompt: str, cwd, *, write: bool,
     # EINTRs and aborts the run. Materialize the whole tree first. Bounded and
     # best-effort: if it times out with files still dataless, log and proceed
     # (the run will fail gracefully via the existing timeout handling).
-    report = materialize_fn(Path(cwd))
+    try:
+        report = materialize_fn(Path(cwd))
+    except Exception:  # materialize is best-effort; never let it fail the run
+        logger.warning("materialize failed before agent run in %s", cwd, exc_info=True)
+        report = None
     if report is not None and getattr(report, "timed_out", False) \
             and getattr(report, "still_dataless", 0):
         logger.warning(

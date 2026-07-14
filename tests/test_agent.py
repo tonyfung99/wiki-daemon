@@ -145,6 +145,22 @@ def test_run_agent_warns_when_materialize_times_out(caplog):
     assert any("dataless" in r.message.lower() for r in caplog.records)
 
 
+def test_run_agent_swallows_materialize_errors(caplog):
+    # Materialize is best-effort: a raising materialize_fn (e.g. brctl missing
+    # from PATH -> FileNotFoundError) must never crash the agent run.
+    p = PROVIDERS["codex"]
+
+    def boom_materialize(root):
+        raise RuntimeError("brctl not found")
+
+    with caplog.at_level(logging.WARNING, logger="wiki_daemon.agent"):
+        res = run_agent(p, "hi", cwd="/vault", write=False,
+                        runner=lambda cmd, cwd, timeout: (0, "ran anyway", ""),
+                        materialize_fn=boom_materialize)
+    assert res.ok and res.stdout == "ran anyway"     # the run still happened
+    assert any("materialize failed" in r.message.lower() for r in caplog.records)
+
+
 def test_run_agent_missing_binary_is_unavailable():
     p = PROVIDERS["codex"]
     def boom(cmd, cwd, timeout):

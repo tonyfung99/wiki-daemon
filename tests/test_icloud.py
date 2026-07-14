@@ -180,7 +180,8 @@ def test_ensure_tree_stays_dataless_is_bounded():
     assert report.timed_out is True
     assert report.still_dataless == 2
     assert report.materialized == 0
-    assert len(sleeps) == 4                          # strictly bounded
+    # strictly bounded: at most max_polls sleeps, and none right before giving up
+    assert len(sleeps) == 3
     assert sum(1 for c in runs if c[0] == "brctl") == 1
 
 
