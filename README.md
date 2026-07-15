@@ -189,6 +189,8 @@ The API binds to `0.0.0.0:7880` by default. Configure in
 api_token = "wk_..."       # managed by `wiki token`
 api_port = 7880             # default
 api_bind = "0.0.0.0"        # default
+query_timeout = 600         # default (seconds); the API running-deadline and
+                            # job-expiry derive from it (timeout < deadline < expiry)
 ```
 
 Or override with `--api-port` / `--api-bind` on `wiki serve`.

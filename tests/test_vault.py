@@ -171,3 +171,21 @@ def test_read_config_api_query_timeout(tmp_path):
     cfg.write_text('query_timeout = 900\n', encoding="utf-8")
     d = read_config_api(cfg)
     assert d["query_timeout"] == 900
+
+
+def test_read_config_api_query_timeout_rejects_bool(tmp_path):
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('query_timeout = true\n', encoding="utf-8")
+    assert "query_timeout" not in read_config_api(cfg)
+
+
+def test_read_config_api_query_timeout_rejects_zero(tmp_path):
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('query_timeout = 0\n', encoding="utf-8")
+    assert "query_timeout" not in read_config_api(cfg)
+
+
+def test_read_config_api_query_timeout_rejects_negative(tmp_path):
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('query_timeout = -5\n', encoding="utf-8")
+    assert "query_timeout" not in read_config_api(cfg)

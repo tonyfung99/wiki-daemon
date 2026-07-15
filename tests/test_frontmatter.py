@@ -33,6 +33,15 @@ def test_parse_malformed_yaml_returns_empty_meta():
     assert body == "body line\n"
 
 
+def test_parse_non_dict_frontmatter_returns_empty_meta():
+    # A YAML list (or bare scalar) is valid YAML but not a mapping; treat it
+    # as empty rather than returning a non-dict that callers can't .get() on.
+    text = "---\n- a\n- b\n---\nbody\n"
+    meta, body = parse(text)
+    assert meta == {}
+    assert body == "body\n"
+
+
 def test_dump_roundtrip():
     meta = {"type": "entity", "title": "Acme"}
     body = "Some body.\n"

@@ -98,8 +98,12 @@ def read_config_api(config_path: Path) -> dict:
         result["api_port"] = data["api_port"]
     if isinstance(data.get("api_bind"), str):
         result["api_bind"] = data["api_bind"]
-    if isinstance(data.get("query_timeout"), int):
-        result["query_timeout"] = data["query_timeout"]
+    qt = data.get("query_timeout")
+    # Reject non-int, bool (isinstance(True, int) is True), and non-positive
+    # values: a 0/negative timeout would make every agent run TimeoutExpired
+    # almost immediately, silently failing all queries. Fall back to default.
+    if isinstance(qt, int) and not isinstance(qt, bool) and qt > 0:
+        result["query_timeout"] = qt
     return result
 
 
