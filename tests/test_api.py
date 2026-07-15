@@ -372,11 +372,12 @@ def test_query_running_past_deadline_returns_failed_timeout(tmp_path):
         assert data["status"] == "running"
 
         # Make it appear to have been running past the deadline by winding
-        # the monotonic start time backwards (older than the deadline, but
-        # still younger than the store expiry so it is not evicted → 404).
+        # the monotonic start time backwards (older than the derived deadline,
+        # but still younger than the store expiry so it is not evicted → 404).
+        # Default: deadline=720, expiry=900, so 800 sits between them.
         store = server.RequestHandlerClass.job_store
         job = store.get(job_id)
-        job.created -= 500.0
+        job.created -= 800.0
 
         data = json.loads(_get(f"{base}/api/v1/query/{job_id}").read())
         assert data["status"] == "failed"
@@ -388,6 +389,22 @@ def test_query_running_past_deadline_returns_failed_timeout(tmp_path):
         assert "time" in data["error"]["message"].lower()
     finally:
         gate.set()
+        server.shutdown()
+
+
+def test_deadline_and_expiry_derived_from_query_timeout(tmp_path):
+    """Deadline and store expiry derive from cfg.query_timeout and stay
+    strictly ordered: timeout < deadline < expiry."""
+    base, server, cfg = _api(tmp_path)
+    try:
+        handler = server.RequestHandlerClass
+        deadline = handler.running_deadline_seconds
+        expiry = handler.job_store._expiry
+        assert cfg.query_timeout == 600
+        assert deadline == cfg.query_timeout + 120
+        assert expiry == cfg.query_timeout + 300
+        assert cfg.query_timeout < deadline < expiry
+    finally:
         server.shutdown()
 
 

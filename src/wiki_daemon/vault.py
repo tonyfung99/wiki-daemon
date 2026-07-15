@@ -87,7 +87,8 @@ def read_config_token(config_path: Path) -> str | None:
 
 
 def read_config_api(config_path: Path) -> dict:
-    """Read api_port / api_bind from config. Returns a dict of present keys only."""
+    """Read api_port / api_bind / query_timeout from config. Returns a dict of
+    present keys only."""
     try:
         data = tomllib.loads(Path(config_path).read_text(encoding="utf-8"))
     except (FileNotFoundError, OSError, tomllib.TOMLDecodeError):
@@ -97,6 +98,12 @@ def read_config_api(config_path: Path) -> dict:
         result["api_port"] = data["api_port"]
     if isinstance(data.get("api_bind"), str):
         result["api_bind"] = data["api_bind"]
+    qt = data.get("query_timeout")
+    # Reject non-int, bool (isinstance(True, int) is True), and non-positive
+    # values: a 0/negative timeout would make every agent run TimeoutExpired
+    # almost immediately, silently failing all queries. Fall back to default.
+    if isinstance(qt, int) and not isinstance(qt, bool) and qt > 0:
+        result["query_timeout"] = qt
     return result
 
 

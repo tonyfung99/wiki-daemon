@@ -2,7 +2,11 @@
 """Parse and serialize YAML frontmatter at the head of a Markdown document."""
 from __future__ import annotations
 
+import logging
+
 import yaml
+
+_log = logging.getLogger("wiki_daemon.frontmatter")
 
 _DELIM = "---"
 
@@ -23,8 +27,19 @@ def parse(text: str) -> tuple[dict, str]:
             return {}, text
         raw = rest[:end]
         body = rest[end + len("\n" + _DELIM + "\n") :]
-    meta = yaml.safe_load(raw) if raw.strip() else None
-    return (meta or {}), body
+    if not raw.strip():
+        return {}, body
+    try:
+        meta = yaml.safe_load(raw)
+    except yaml.YAMLError as exc:
+        # A single malformed page (e.g. an unquoted colon in a value) must not
+        # crash a caller that parses many pages: treat frontmatter as empty.
+        _log.warning("dropping malformed YAML frontmatter: %s", exc)
+        return {}, body
+    if not isinstance(meta, dict):
+        _log.warning("dropping non-dict frontmatter (got %s)", type(meta).__name__)
+        return {}, body
+    return meta, body
 
 
 def dump(meta: dict, body: str) -> str:

@@ -201,6 +201,10 @@ def serve(cfg: Config, *, reconcile_interval: float = 300.0, tick: float = 2.0,
         api_cfg = read_config_api(config_path) if config_path else {}
         host = api_bind or api_cfg.get("api_bind", "0.0.0.0")
         port = api_port or api_cfg.get("api_port", 7880)
+        # query_timeout from config.toml feeds both ops.query (the agent run)
+        # and the API's derived deadline/expiry (via cfg in start_api_server).
+        if "query_timeout" in api_cfg:
+            cfg.query_timeout = api_cfg["query_timeout"]
         api_server = start_api_server(cfg, config_path=config_path or Path(),
                                       host=host, port=port)
 
