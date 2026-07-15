@@ -205,7 +205,7 @@ def query(cfg: Config, question: str, *, save: bool = False,
     kwargs = {} if runner is None else {"runner": runner}
     result = run_agent(
         get_provider(cfg), query_prompt(question, save=save), cfg.vault,
-        write=save, **kwargs)
+        write=save, timeout=cfg.query_timeout, **kwargs)
     if not result.ok:
         return QueryResult(ok=False, kind=classify_failure(result),
                            reason=f"agent failed: {(result.stdout + result.stderr).strip()[:300]}")

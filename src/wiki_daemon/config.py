@@ -20,6 +20,7 @@ class Config:
     api_token: str | None = None
     api_port: int = 7880
     api_bind: str = "0.0.0.0"
+    query_timeout: int = 600   # seconds for a save/read query agent run
 
     def __post_init__(self) -> None:
         self.vault = Path(self.vault).expanduser().resolve()

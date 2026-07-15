@@ -87,7 +87,8 @@ def read_config_token(config_path: Path) -> str | None:
 
 
 def read_config_api(config_path: Path) -> dict:
-    """Read api_port / api_bind from config. Returns a dict of present keys only."""
+    """Read api_port / api_bind / query_timeout from config. Returns a dict of
+    present keys only."""
     try:
         data = tomllib.loads(Path(config_path).read_text(encoding="utf-8"))
     except (FileNotFoundError, OSError, tomllib.TOMLDecodeError):
@@ -97,6 +98,8 @@ def read_config_api(config_path: Path) -> dict:
         result["api_port"] = data["api_port"]
     if isinstance(data.get("api_bind"), str):
         result["api_bind"] = data["api_bind"]
+    if isinstance(data.get("query_timeout"), int):
+        result["query_timeout"] = data["query_timeout"]
     return result
 
 

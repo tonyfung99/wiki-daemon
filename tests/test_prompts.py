@@ -53,6 +53,13 @@ def test_query_prompt_save_mentions_queries_and_type():
     assert "wiki/log.md" in p
 
 
+def test_query_prompt_save_quotes_title():
+    # A title with a colon must not produce invalid YAML frontmatter, so the
+    # prompt must instruct a quoted title.
+    p = query_prompt("What is photosynthesis?", save=True)
+    assert 'title: "' in p
+
+
 from wiki_daemon.prompts import lint_prompt, lint_repair_prompt
 
 

@@ -164,3 +164,10 @@ def test_read_config_api(tmp_path):
 def test_read_config_api_defaults_on_missing(tmp_path):
     d = read_config_api(tmp_path / "nope.toml")
     assert d == {}
+
+
+def test_read_config_api_query_timeout(tmp_path):
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('query_timeout = 900\n', encoding="utf-8")
+    d = read_config_api(cfg)
+    assert d["query_timeout"] == 900

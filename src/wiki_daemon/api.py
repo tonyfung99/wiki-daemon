@@ -23,14 +23,22 @@ _log = logging.getLogger("wiki_daemon.api")
 
 _WIKI_LINK_RE = re.compile(r"\[\[([^\[\]\|]+?)(?:\|([^\[\]]+?))?\]\]")
 
-# Server-side deadline: once a query job has been "running" longer than this,
-# GET reports it as a failed timeout instead of an eternal "running" (defense
-# against a wedged worker that never calls JobStore.complete()). Must sit
-# strictly between the agent subprocess timeout (300s) and the JobStore expiry
-# (600s): > 300 so a normal slow query is never failed early, < 600 so the
-# client receives this failed response before the job is evicted (which would
-# otherwise surface a confusing 404).
-QUERY_RUNNING_DEADLINE_SECONDS = 420.0
+# Three coordinated timeouts, all derived per-server from cfg.query_timeout so
+# they move together if the user tunes it (see start_api_server). The invariant
+#
+#     query_timeout < running_deadline < job_expiry
+#
+# must always hold:
+#   - query_timeout: how long the agent subprocess may run (ops.query).
+#   - running_deadline (= query_timeout + 120): once a job has been "running"
+#     longer than this, GET reports it as a failed timeout instead of an eternal
+#     "running" (defense against a wedged worker that never completes). > the
+#     agent timeout so a normal slow query is never failed early.
+#   - job_expiry (= query_timeout + 300): JobStore evicts jobs older than this.
+#     > the deadline so the client receives the failed response before the job
+#     is evicted (which would otherwise surface a confusing 404).
+QUERY_DEADLINE_MARGIN_SECONDS = 120.0
+QUERY_EXPIRY_MARGIN_SECONDS = 300.0
 
 
 def extract_citations(markdown: str) -> list[dict]:
@@ -133,6 +141,7 @@ class ApiHandler(BaseHTTPRequestHandler):
     config_path: Path
     job_store: JobStore
     query_fn: object  # callable(cfg, question, *, save) -> QueryResult
+    running_deadline_seconds: float  # derived from cfg.query_timeout per-server
 
     def log_message(self, format, *args):  # noqa: A002
         _log.info(format, *args)
@@ -262,7 +271,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             "status": job.status,
         }
         if job.status == "running":
-            if _time.monotonic() - job.created > QUERY_RUNNING_DEADLINE_SECONDS:
+            if _time.monotonic() - job.created > self.running_deadline_seconds:
                 # Wedged worker: synthesize a terminal failed/timeout response
                 # so the client stops polling. The stored job is left as-is; if
                 # the worker ever completes, a later GET reflects its real
@@ -315,7 +324,12 @@ def start_api_server(cfg: Config, *, config_path: Path,
 
     Returns the server instance (call server.shutdown() to stop).
     """
-    store = JobStore()
+    # Derive the coordinated timeouts from the configured query timeout so the
+    # invariant query_timeout < deadline < expiry always holds (see the module
+    # comment above the margin constants).
+    deadline = cfg.query_timeout + QUERY_DEADLINE_MARGIN_SECONDS
+    expiry = cfg.query_timeout + QUERY_EXPIRY_MARGIN_SECONDS
+    store = JobStore(expiry_seconds=expiry)
     qfn = query_fn or _ops_query
 
     class Handler(ApiHandler):
@@ -325,6 +339,7 @@ def start_api_server(cfg: Config, *, config_path: Path,
     Handler.config_path = config_path
     Handler.job_store = store
     Handler.query_fn = staticmethod(qfn)
+    Handler.running_deadline_seconds = deadline
 
     server = ThreadingHTTPServer((host, port), Handler)
     t = threading.Thread(target=server.serve_forever, daemon=True)

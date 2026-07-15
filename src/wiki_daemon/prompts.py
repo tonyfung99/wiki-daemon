@@ -55,8 +55,10 @@ def query_prompt(question: str, *, save: bool = False) -> str:
         )
     return base + (
         "\nThen SAVE-QUERY: write the answer as wiki/queries/<kebab-slug>.md with "
-        "frontmatter `type: query` and `query: \"<the question>\"` (plus title and "
-        "updated), update wiki/index.md, and append a line to wiki/log.md. You MAY "
+        "frontmatter `type: query`, `query: \"<the question>\"`, and "
+        "`title: \"<title>\"` (both the query and title MUST be double-quoted so a "
+        "colon in them can't break the YAML), plus `updated`. Update wiki/index.md, "
+        "and append a line to wiki/log.md. You MAY "
         "also write companion artifact files alongside it (e.g. a Marp deck "
         "wiki/queries/<kebab-slug>-deck.md) and link them — Markdown/text only, no "
         "code execution."

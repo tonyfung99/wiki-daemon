@@ -23,8 +23,17 @@ def parse(text: str) -> tuple[dict, str]:
             return {}, text
         raw = rest[:end]
         body = rest[end + len("\n" + _DELIM + "\n") :]
-    meta = yaml.safe_load(raw) if raw.strip() else None
-    return (meta or {}), body
+    if not raw.strip():
+        return {}, body
+    try:
+        meta = yaml.safe_load(raw)
+    except yaml.YAMLError:
+        # A single malformed page (e.g. an unquoted colon in a value) must not
+        # crash a caller that parses many pages: treat frontmatter as empty.
+        return {}, body
+    if not isinstance(meta, dict):
+        return {}, body
+    return meta, body
 
 
 def dump(meta: dict, body: str) -> str:

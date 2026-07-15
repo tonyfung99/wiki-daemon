@@ -35,3 +35,10 @@ def test_config_api_defaults():
     assert cfg.api_token is None
     assert cfg.api_port == 7880
     assert cfg.api_bind == "0.0.0.0"
+
+
+def test_config_query_timeout_default_and_override():
+    cfg = Config(vault="/tmp/v")
+    assert cfg.query_timeout == 600
+    cfg2 = Config(vault="/tmp/v", query_timeout=900)
+    assert cfg2.query_timeout == 900

@@ -280,6 +280,35 @@ def test_query_readonly_returns_stdout_and_uses_readonly_tools(tmp_path):
     assert "Write" not in seen["cmd"] and "Edit" not in seen["cmd"]
 
 
+def test_query_uses_configured_query_timeout(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s",
+                 query_timeout=900)
+    from wiki_daemon.scaffold import init_vault
+    init_vault(cfg)
+    seen = {}
+
+    def runner(cmd, cwd, timeout):
+        seen["timeout"] = timeout
+        return 0, "answer", ""
+
+    query(cfg, "Q?", runner=runner)
+    assert seen["timeout"] == 900
+
+
+def test_query_default_timeout_is_600(tmp_path):
+    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
+    from wiki_daemon.scaffold import init_vault
+    init_vault(cfg)
+    seen = {}
+
+    def runner(cmd, cwd, timeout):
+        seen["timeout"] = timeout
+        return 0, "answer", ""
+
+    query(cfg, "Q?", runner=runner)
+    assert seen["timeout"] == 600
+
+
 def test_query_claude_failure_sets_kind(tmp_path):
     cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
     from wiki_daemon.scaffold import init_vault
