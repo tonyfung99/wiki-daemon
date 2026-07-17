@@ -105,15 +105,24 @@ filename already exists for a different question.
 **Date.** `updated:` and the log line use `datetime.date.today()` (the daemon runs
 in a normal process; no workflow-clock restriction applies).
 
-### Concurrency / single-writer guarantee
+### Concurrency
 
-The repository invariant is that the daemon is the single writer of `wiki/`.
-`index.md` and `log.md` are shared with the ingest path (which writes `wiki/` via
-the agent). `persist_query` therefore must be **serialized against ingest writes**
-by holding the same write-serialization lock the ingest worker uses. The
-implementation plan will pin the exact lock; the query page itself lives under
-`wiki/queries/` (not touched by ingest), but the `index.md`/`log.md`
-read-modify-write must be protected against lost updates.
+The daemon serializes ingest by running a single write-worker; there is no shared
+write-lock, and ingest rewrites `index.md` *inside* its minutes-long agent call.
+Wrapping that call in a lock shared with `persist_query` would block the query's
+API response for the whole ingest duration, so full serialization is rejected.
+
+`persist_query` instead takes a **module-level `threading.Lock`** around its own
+read-modify-write of `index.md`/`log.md`. This makes concurrent *queries* safe
+(the common case: multiple API threads). The query page itself lives under
+`wiki/queries/`, which the ingest path never touches, so it is always safe.
+
+Residual race: a query writing `index.md` at the same instant an ingest rewrites
+it could drop the single query line. This is low-frequency and non-catastrophic —
+the query page still exists in `wiki/queries/` and is discoverable via the app's
+folder browser; only the index link is missing. A future enhancement can make the
+ingest reconcile rebuild the `## Queries` section from the folder (self-healing,
+the way entity/concept lines already are); it is out of scope here.
 
 ### `prompts.query_prompt`
 
