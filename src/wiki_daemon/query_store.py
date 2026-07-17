@@ -85,3 +85,50 @@ def _unique_slug(qdir: Path, slug: str) -> str:
     while (qdir / f"{slug}-{n}.md").exists():
         n += 1
     return f"{slug}-{n}"
+
+
+def _write_index_line(cfg: Config, slug: str, title: str) -> None:
+    index = cfg.wiki / "index.md"
+    text = index.read_text(encoding="utf-8") if index.exists() else "# Index\n"
+    line = f"- [[{slug}|{title}]]"
+    if line in text:
+        return
+    index.write_text(_insert_under_section(text, "## Queries", line), encoding="utf-8")
+
+
+def _append_log(cfg: Config, question: str, today: str) -> None:
+    log = cfg.wiki / "log.md"
+    text = log.read_text(encoding="utf-8") if log.exists() else "# Log\n"
+    if not text.endswith("\n"):
+        text += "\n"
+    log.write_text(text + f"## [{today}] query | {question}\n", encoding="utf-8")
+
+
+def persist_query(cfg: Config, question: str, answer: str) -> tuple[bool, str]:
+    """Write the query answer into the vault: a `wiki/queries/<slug>.md` page,
+    a line under `## Queries` in index.md, and a log.md line. Returns
+    (True, "") on success, or (False, reason) on any I/O failure — the answer is
+    still returned to the caller; only `saved` is False."""
+    with _write_lock:
+        try:
+            qdir = cfg.wiki / "queries"
+            qdir.mkdir(parents=True, exist_ok=True)
+            title = _title_from_question(question)
+            today = date.today().isoformat()
+            existing = _find_existing_page(qdir, question)
+            if existing is not None:
+                path = existing
+                is_new = False
+            else:
+                slug = _unique_slug(qdir, _slugify(title))
+                path = qdir / f"{slug}.md"
+                is_new = True
+            meta = {"type": "query", "title": title, "query": question,
+                    "updated": today}
+            path.write_text(dump(meta, answer), encoding="utf-8")
+            if is_new:
+                _write_index_line(cfg, path.stem, title)
+            _append_log(cfg, question, today)
+            return True, ""
+        except OSError as exc:
+            return False, f"save failed: {exc}"
