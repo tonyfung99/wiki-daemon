@@ -259,7 +259,7 @@ def test_ingest_interactive_skips_already_processed(tmp_path):
     assert called["n"] == 0  # never launched claude
 
 
-from wiki_daemon.ops import query, QueryResult, _verify_query
+from wiki_daemon.ops import query, QueryResult
 
 
 def test_query_readonly_returns_stdout_and_uses_readonly_tools(tmp_path):
@@ -321,63 +321,41 @@ def test_query_claude_failure_sets_kind(tmp_path):
     assert result.ok is False and result.kind == "auth" and result.answer == ""
 
 
-def test_query_save_success_verifies_query_page(tmp_path):
-    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
-    from wiki_daemon.scaffold import init_vault
-    init_vault(cfg)
-
+def _make_runner(recorder):
+    # runner(cmd, cwd, timeout) -> (returncode, stdout, stderr)
     def runner(cmd, cwd, timeout):
-        assert "Write" in cmd
-        (cfg.wiki / "queries" / "photosynthesis.md").write_text(
-            "---\ntype: query\nquery: \"What is photosynthesis?\"\n---\nanswer\n",
-            encoding="utf-8")
-        return 0, "the answer", ""
-
-    result = query(cfg, "What is photosynthesis?", save=True, runner=runner)
-    assert result.ok is True and result.saved is True
-    assert result.answer == "the answer"
+        recorder["cmd"] = cmd
+        return 0, "ANSWER [[Daemon]]\n", ""
+    return runner
 
 
-def test_query_save_with_companion_artifact_still_saved(tmp_path):
-    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
-    from wiki_daemon.scaffold import init_vault
-    init_vault(cfg)
-
-    def runner(cmd, cwd, timeout):
-        (cfg.wiki / "queries" / "q.md").write_text(
-            "---\ntype: query\nquery: \"Q\"\n---\nanswer\n", encoding="utf-8")
-        (cfg.wiki / "queries" / "q-deck.md").write_text("# Deck\n", encoding="utf-8")
-        return 0, "a", ""
-
-    result = query(cfg, "Q", save=True, runner=runner)
-    assert result.saved is True
+def _query_vault(tmp_path):
+    v = tmp_path / "vault"
+    (v / "wiki" / "queries").mkdir(parents=True)
+    (v / "wiki" / "index.md").write_text("# Index\n\n## Queries\n", encoding="utf-8")
+    (v / "wiki" / "log.md").write_text("# Log\n", encoding="utf-8")
+    return v
 
 
-def test_query_save_failure_when_no_page_written(tmp_path):
-    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
-    from wiki_daemon.scaffold import init_vault
-    init_vault(cfg)
-
-    def runner(cmd, cwd, timeout):
-        return 0, "the answer", ""
-
-    result = query(cfg, "Q", save=True, runner=runner)
-    assert result.ok is True and result.saved is False
-    assert "query page" in result.reason
-    assert result.answer == "the answer"
+def test_query_read_only_no_save(tmp_path):
+    cfg = Config(vault=_query_vault(tmp_path), provider="codex")
+    rec = {}
+    r = query(cfg, "What is a daemon?", save=False, runner=_make_runner(rec))
+    assert r.ok and r.answer.startswith("ANSWER")
+    assert r.saved is False
+    # No page written when save=False:
+    assert list((cfg.wiki / "queries").glob("*.md")) == []
+    # The agent was invoked read-only (codex read-only cmd, not workspace-write):
+    assert "workspace-write" not in " ".join(rec["cmd"])
 
 
-def test_verify_query_matches_whitespace_insensitively(tmp_path):
-    cfg = Config(vault=tmp_path / "v", state_root=tmp_path / "s")
-    from wiki_daemon.scaffold import init_vault
-    init_vault(cfg)
-    (cfg.wiki / "queries" / "p.md").write_text(
-        "---\ntype: query\nquery: \"What   is  photosynthesis?\"\n---\nx\n",
-        encoding="utf-8")
-    ok, _ = _verify_query(cfg, "What is photosynthesis?")
-    assert ok is True
-    ok2, reason = _verify_query(cfg, "A different question?")
-    assert ok2 is False and "query page" in reason
+def test_query_save_persists_via_daemon(tmp_path):
+    cfg = Config(vault=_query_vault(tmp_path), provider="codex")
+    r = query(cfg, "What is a daemon?", save=True, runner=_make_runner({}))
+    assert r.ok and r.saved is True
+    pages = list((cfg.wiki / "queries").glob("*.md"))
+    assert len(pages) == 1
+    assert "ANSWER" in pages[0].read_text(encoding="utf-8")
 
 
 from wiki_daemon.ops import lint_deep, lint_repair, LintScan, ApplyResult
