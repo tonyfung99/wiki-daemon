@@ -38,30 +38,17 @@ def apply_clarification_prompt(review_rel_path: str) -> str:
     )
 
 
-def query_prompt(question: str, *, save: bool = False) -> str:
-    base = (
+def query_prompt(question: str) -> str:
+    return (
         "Follow the QUERY operation defined in your project instructions exactly.\n"
         f"Answer this question from the wiki, citing the pages you used: {question}\n"
         "Read wiki/index.md first, open the relevant pages, and synthesize an "
         "answer with [[wiki-link]] citations. Use rich Markdown where it helps — "
         "comparison tables, Mermaid diagrams (```mermaid), and fenced code "
         "snippets (e.g. ```python) — but do NOT execute code. Do not modify "
-        "anything under raw/."
-    )
-    if not save:
-        return base + (
-            "\nThis is READ-ONLY: do not create or edit any files. Print the "
-            "answer (Markdown tables and ```mermaid/code blocks are fine in text)."
-        )
-    return base + (
-        "\nThen SAVE-QUERY: write the answer as wiki/queries/<kebab-slug>.md with "
-        "frontmatter `type: query`, `query: \"<the question>\"`, and "
-        "`title: \"<title>\"` (both the query and title MUST be double-quoted so a "
-        "colon in them can't break the YAML), plus `updated`. Update wiki/index.md, "
-        "and append a line to wiki/log.md. You MAY "
-        "also write companion artifact files alongside it (e.g. a Marp deck "
-        "wiki/queries/<kebab-slug>-deck.md) and link them — Markdown/text only, no "
-        "code execution."
+        "anything under raw/.\n"
+        "This is READ-ONLY: do not create or edit any files. Print the answer "
+        "(Markdown tables and ```mermaid/code blocks are fine in text)."
     )
 
 

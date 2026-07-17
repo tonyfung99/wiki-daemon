@@ -94,25 +94,6 @@ Given a question:
 4. By default this is READ-ONLY: do not create or edit files; just give the
    answer.
 
-## SAVE-QUERY
-When asked to save a query answer, additionally:
-1. Write the answer as `wiki/queries/<kebab-slug>.md` with frontmatter:
-   ```
-   ---
-   type: query
-   title: <Human Title>
-   query: "<the exact question asked>"
-   updated: <YYYY-MM-DD>
-   ---
-   ```
-   followed by the answer body (with `[[wiki-link]]` citations).
-2. You MAY write companion artifact files alongside it (e.g. a Marp deck
-   `wiki/queries/<kebab-slug>-deck.md`) and link them from the page — Markdown/
-   text only, no code execution.
-3. Update `wiki/index.md` to list the new page.
-4. Append one line to `wiki/log.md`:
-   `## [<YYYY-MM-DD>] query | <question>`
-
 ## LINT operation
 Read-only health check. Scan the wiki and report (do not modify files):
 - **Contradictions** — pages that assert conflicting facts.

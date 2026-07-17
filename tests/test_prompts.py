@@ -46,18 +46,20 @@ def test_query_prompt_readonly_names_question_and_no_files():
     assert "mermaid" in p.lower()
 
 
-def test_query_prompt_save_mentions_queries_and_type():
-    p = query_prompt("What is photosynthesis?", save=True)
-    assert "wiki/queries/" in p
-    assert "type: query" in p
-    assert "wiki/log.md" in p
+def test_query_prompt_is_read_only():
+    p = query_prompt("What is a daemon?")
+    assert "What is a daemon?" in p
+    assert "READ-ONLY" in p
+    # No save/write instructions remain:
+    assert "SAVE-QUERY" not in p
+    assert "wiki/queries/" not in p
+    assert "Marp" not in p
 
 
-def test_query_prompt_save_quotes_title():
-    # A title with a colon must not produce invalid YAML frontmatter, so the
-    # prompt must instruct a quoted title.
-    p = query_prompt("What is photosynthesis?", save=True)
-    assert 'title: "' in p
+def test_query_prompt_takes_no_save_kwarg():
+    import inspect
+    sig = inspect.signature(query_prompt)
+    assert "save" not in sig.parameters
 
 
 from wiki_daemon.prompts import lint_prompt, lint_repair_prompt

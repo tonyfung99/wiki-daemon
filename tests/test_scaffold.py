@@ -41,8 +41,7 @@ def test_template_has_query_sections(tmp_path):
     init_vault(cfg)
     text = (cfg.vault / "CLAUDE.md").read_text(encoding="utf-8")
     assert "## QUERY operation" in text
-    assert "## SAVE-QUERY" in text
-    assert "type: query" in text
+    assert "## SAVE-QUERY" not in text  # daemon persists queries now
 
 
 def test_template_has_lint_sections(tmp_path):

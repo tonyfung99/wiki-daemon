@@ -14,6 +14,7 @@ from wiki_daemon.prompts import (
     ingest_prompt, apply_clarification_prompt, query_prompt,
     lint_prompt, lint_repair_prompt,
 )
+from wiki_daemon.query_store import persist_query
 from wiki_daemon.sources import read_source
 from wiki_daemon.state import StateStore
 
@@ -69,35 +70,6 @@ def _source_referenced(cfg: Config, source_rel: str) -> bool:
 def _verify(cfg: Config, source_rel: str) -> tuple[bool, str]:
     if not _source_referenced(cfg, source_rel):
         return False, "no source summary page references this source"
-    if not (cfg.wiki / "index.md").exists():
-        return False, "index.md missing"
-    if not (cfg.wiki / "log.md").exists():
-        return False, "log.md missing"
-    return True, ""
-
-
-def _normalize_q(s: str) -> str:
-    return " ".join(s.split())
-
-
-def _query_recorded(cfg: Config, question: str) -> bool:
-    """A wiki/queries/*.md page records this question in its `query:` frontmatter
-    (whitespace-normalized) — the traceability contract for a saved query."""
-    qdir = cfg.wiki / "queries"
-    if not qdir.is_dir():
-        return False
-    target = _normalize_q(question)
-    for page in qdir.glob("*.md"):
-        meta, _ = parse(page.read_text(encoding="utf-8"))
-        q = meta.get("query")
-        if q is not None and _normalize_q(str(q)) == target:
-            return True
-    return False
-
-
-def _verify_query(cfg: Config, question: str) -> tuple[bool, str]:
-    if not _query_recorded(cfg, question):
-        return False, "no query page records this question"
     if not (cfg.wiki / "index.md").exists():
         return False, "index.md missing"
     if not (cfg.wiki / "log.md").exists():
@@ -200,21 +172,22 @@ def apply_clarification(cfg: Config, review_id: str, *,
 
 def query(cfg: Config, question: str, *, save: bool = False,
           runner: Runner | None = None) -> QueryResult:
-    """Answer a question from the wiki. Read-only by default; with save=True the
-    maintainer also files the answer as a wiki/queries/ page (verified)."""
+    """Answer a question from the wiki. The agent runs READ-ONLY; with save=True
+    the daemon files the answer as a wiki/queries/ page itself (the agent's
+    workspace-write path is unreliable for this)."""
     kwargs = {} if runner is None else {"runner": runner}
     result = run_agent(
-        get_provider(cfg), query_prompt(question, save=save), cfg.vault,
-        write=save, timeout=cfg.query_timeout, **kwargs)
+        get_provider(cfg), query_prompt(question), cfg.vault,
+        write=False, timeout=cfg.query_timeout, **kwargs)
     if not result.ok:
         return QueryResult(ok=False, kind=classify_failure(result),
                            reason=f"agent failed: {(result.stdout + result.stderr).strip()[:300]}")
     answer = result.stdout
     if not save:
         return QueryResult(ok=True, answer=answer)
-    ok2, reason = _verify_query(cfg, question)
-    return QueryResult(ok=True, answer=answer, saved=ok2,
-                       reason=("" if ok2 else reason))
+    saved, reason = persist_query(cfg, question, answer)
+    return QueryResult(ok=True, answer=answer, saved=saved,
+                       reason=("" if saved else reason))
 
 
 def lint_deep(cfg: Config, *, runner: Runner | None = None) -> LintScan:

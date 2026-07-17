@@ -14,7 +14,6 @@ TEMPLATE_HEADERS = [
     "## RAISE CLARIFICATION (during INGEST)",
     "## APPLY CLARIFICATION",
     "## QUERY operation",
-    "## SAVE-QUERY",
     "## LINT operation",
     "## LINT REPAIR",
 ]
@@ -47,7 +46,6 @@ def test_missing_sections_on_old_prefix_returns_tail():
         "## RAISE CLARIFICATION (during INGEST)",
         "## APPLY CLARIFICATION",
         "## QUERY operation",
-        "## SAVE-QUERY",
         "## LINT operation",
         "## LINT REPAIR",
     ]
@@ -63,7 +61,6 @@ def test_apply_upgrade_appends_missing_and_reports_headers():
         "## RAISE CLARIFICATION (during INGEST)",
         "## APPLY CLARIFICATION",
         "## QUERY operation",
-        "## SAVE-QUERY",
         "## LINT operation",
         "## LINT REPAIR",
     ]
