@@ -39,3 +39,22 @@ def _title_from_question(question: str) -> str:
     if len(t) > _TITLE_MAX:
         t = t[:_TITLE_MAX].rsplit(" ", 1)[0].rstrip()
     return t[:1].upper() + t[1:] if t else "Query"
+
+
+def _insert_under_section(text: str, section: str, line: str) -> str:
+    """Insert `line` immediately after the `section` header (newest first). If
+    the section is absent, append the section header and the line at the end."""
+    lines = text.splitlines()
+    out: list[str] = []
+    inserted = False
+    for l in lines:
+        out.append(l)
+        if not inserted and l.strip() == section:
+            out.append(line)
+            inserted = True
+    if not inserted:
+        if out and out[-1].strip() != "":
+            out.append("")
+        out.append(section)
+        out.append(line)
+    return "\n".join(out) + "\n"
