@@ -118,16 +118,16 @@ def persist_query(cfg: Config, question: str, answer: str) -> tuple[bool, str]:
             existing = _find_existing_page(qdir, question)
             if existing is not None:
                 path = existing
-                is_new = False
             else:
                 slug = _unique_slug(qdir, _slugify(title))
                 path = qdir / f"{slug}.md"
-                is_new = True
             meta = {"type": "query", "title": title, "query": question,
                     "updated": today}
             path.write_text(dump(meta, answer), encoding="utf-8")
-            if is_new:
-                _write_index_line(cfg, path.stem, title)
+            # Call unconditionally: _write_index_line is idempotent (skips if the
+            # line is already present), so a re-ask re-adds a missing line and
+            # self-heals an orphan left by an earlier index-write failure.
+            _write_index_line(cfg, path.stem, title)
             _append_log(cfg, question, today)
             return True, ""
         except OSError as exc:

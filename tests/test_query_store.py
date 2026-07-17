@@ -139,7 +139,6 @@ def test_persist_reask_updates_in_place(tmp_path):
 def test_persist_returns_false_on_write_error(tmp_path, monkeypatch):
     cfg = _cfg(tmp_path)
 
-    import wiki_daemon.query_store as qs
     orig = Path.write_text
 
     def boom(self, *a, **k):
@@ -151,3 +150,34 @@ def test_persist_returns_false_on_write_error(tmp_path, monkeypatch):
     saved, reason = persist_query(cfg, "Q", "A\n")
     assert saved is False
     assert "disk full" in reason
+
+
+def test_persist_reindexes_orphan_after_index_write_failure(tmp_path, monkeypatch):
+    # If the page write succeeds but the index write fails, the page is an
+    # orphan (unlinked from index.md). A later re-ask must self-heal by
+    # re-adding the index line — not skip it forever.
+    cfg = _cfg(tmp_path)
+    orig = Path.write_text
+    calls = {"index": 0}
+
+    def boom(self, *a, **k):
+        if self.name == "index.md":
+            calls["index"] += 1
+            if calls["index"] == 1:
+                raise OSError("index locked")
+        return orig(self, *a, **k)
+
+    monkeypatch.setattr(Path, "write_text", boom)
+
+    saved, reason = persist_query(cfg, "What is a daemon?", "first\n")
+    assert saved is False
+    pages = list((cfg.wiki / "queries").glob("*.md"))
+    assert len(pages) == 1  # page written despite index failure
+    idx = (cfg.wiki / "index.md").read_text(encoding="utf-8")
+    assert pages[0].stem not in idx  # orphan: no index line yet
+
+    # Re-ask the same question; index is now writable -> orphan re-linked.
+    saved2, _ = persist_query(cfg, "What is a daemon?", "second\n")
+    assert saved2 is True
+    idx2 = (cfg.wiki / "index.md").read_text(encoding="utf-8")
+    assert pages[0].stem in idx2
