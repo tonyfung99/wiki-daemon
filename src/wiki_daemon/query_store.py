@@ -58,3 +58,30 @@ def _insert_under_section(text: str, section: str, line: str) -> str:
         out.append(section)
         out.append(line)
     return "\n".join(out) + "\n"
+
+
+def _find_existing_page(qdir: Path, question: str) -> Path | None:
+    """Return the queries page whose `query:` frontmatter matches `question`
+    (whitespace-normalized), or None. Malformed pages are skipped."""
+    if not qdir.is_dir():
+        return None
+    target = _normalize_q(question)
+    for page in sorted(qdir.glob("*.md")):
+        try:
+            meta, _ = parse(page.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        q = meta.get("query")
+        if q is not None and _normalize_q(str(q)) == target:
+            return page
+    return None
+
+
+def _unique_slug(qdir: Path, slug: str) -> str:
+    """A slug whose `<slug>.md` does not yet exist in qdir (append -2, -3, ...)."""
+    if not (qdir / f"{slug}.md").exists():
+        return slug
+    n = 2
+    while (qdir / f"{slug}-{n}.md").exists():
+        n += 1
+    return f"{slug}-{n}"
